@@ -1,0 +1,21 @@
+
+# mkdocs.yml
+site_name: ML_Project
+site_url: FILL OUT
+repo_url: https://github.com/andrewzeidell/test
+nav:
+  - Home: index.md
+  - workflows:
+    - main: ML_Project/main.md
+  - ML_Project:
+    - plotter: ML_Project/plotter.md
+    - data: ML_Project/data.md
+    - evaluate: ML_Project/evaluate.md
+    - predict: ML_Project/predict.md
+    - train: ML_Project/train.md
+    - report: ML_Project/report.md
+theme: readthedocs
+plugins:
+  - mkdocstrings
+watch:
+  - .  # reload docs for any file changes
