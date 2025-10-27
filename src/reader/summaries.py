@@ -88,6 +88,37 @@ def enrich_data(df: pd.DataFrame, lookups: Dict[str, pd.DataFrame]) -> pd.DataFr
 
     return df
 
+def filter_stem_jobs(df: pd.DataFrame, stem_groups: pd.DataFrame | None) -> pd.DataFrame:
+    """
+    Filter the DataFrame to keep only rows with SOC codes in the allowed STEM groups.
+
+    Args:
+        df (pd.DataFrame): DataFrame with job postings.
+        stem_groups (pd.DataFrame | None): STEM groups DataFrame or None if not available.
+
+    Returns:
+        pd.DataFrame: Filtered DataFrame containing only STEM job postings.
+    """
+    if stem_groups is None:
+        print("Warning: STEM groups DataFrame is None. Skipping STEM filtering.")
+        return df
+
+    # Clean column names and normalize SOC Code column
+    stem_groups = stem_groups.copy()
+    stem_groups.columns = stem_groups.columns.str.strip()
+    if 'SOC Code' in stem_groups.columns:
+        stem_groups['SOC Code'] = stem_groups['SOC Code'].astype(str).str.replace(r'[^0-9-]', '', regex=True)
+
+    # Extract allowed SOC codes based on STEM groups excluding non-stem
+    keep_groups = [g for g in stem_groups['STEM Group'].unique() if g.lower() not in ["non-stem", "non stem"]]
+    allow_soc = stem_groups[stem_groups['STEM Group'].isin(keep_groups)]['SOC Code'].unique()
+
+    before_n = len(df)
+    filtered_df = df[df['soc2018_from_onet'].isin(allow_soc)]
+    after_n = len(filtered_df)
+    print(f"\\nFiltered by SOC allowlist for STEM. Rows kept: {after_n} of {before_n}")
+
+    return filtered_df
 
 def calculate_posting_age(df: pd.DataFrame) -> pd.DataFrame:
     """

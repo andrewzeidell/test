@@ -129,19 +129,8 @@ def process_file(file_path: str, output_dir: str, output_format: str) -> None:
     """
     logging.info("Processing file: %s", file_path)
     try:
-        columns = [
-            "date_acquired",
-            "expired_date",
-            "parameters_salary_min",
-            "parameters_salary_max",
-            "parameters_salary_unit",
-            "classifications_onet_code",
-            "requirements_min_education",
-            "requirements_experience",
-            "requirements_license",
-            "ghostjob",
-            "remote_flag",
-        ]
+        from src.reader.etl import MINIMAL_COLUMNS
+        columns = MINIMAL_COLUMNS
         # Fix: read_single_parquet_file expects a single file path and columns
         from src.reader.etl import read_single_parquet_file
 
@@ -200,19 +189,8 @@ def main() -> None:
         args = parse_args()
         logging.info("Starting read_and_extract with args: %s", args)
         try:
-            columns = [
-                "date_acquired",
-                "expired_date",
-                "parameters_salary_min",
-                "parameters_salary_max",
-                "parameters_salary_unit",
-                "classifications_onet_code",
-                "requirements_min_education",
-                "requirements_experience",
-                "requirements_license",
-                "ghostjob",
-                "remote_flag",
-            ]
+            from src.reader.etl import MINIMAL_COLUMNS
+            columns = MINIMAL_COLUMNS
             # Refactor CLI to process files individually for memory efficiency and per-file aggregation
             files = find_parquet_files(args.input_dir, args.date_pattern)
             logging.info("Found %d parquet files to process.", len(files))
