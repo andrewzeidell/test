@@ -19,6 +19,7 @@ import pandas as pd
 from src.reader.etl import read_parquet_files
 from src.reader.transforms import transformations
 from src.reader.transforms import lookup_utils
+from src.reader import summaries
 
 
 def parse_args() -> argparse.Namespace:
@@ -238,6 +239,38 @@ def main() -> None:
             else:
                 df.to_feather(output_file)
             logging.info("Saved cleaned data to %s", output_file)
+        except Exception as e:
+            logging.error("Error during processing: %s", e, exc_info=True)
+            sys.exit(1)
+
+        # --- Integration with summaries module ---
+        try:
+            logging.info("Starting data enrichment and aggregation using summaries module.")
+            lookups_dir = "data/raw"  # Assuming lookups are in raw data dir; adjust if needed
+            lookups = summaries.load_lookups(lookups_dir)
+            enriched_df = summaries.enrich_data(df, lookups)
+            enriched_df = summaries.calculate_posting_age(enriched_df)
+            enriched_df = summaries.normalize_pay(enriched_df)
+
+            # Aggregate data
+            geography_agg = summaries.aggregate_geography(enriched_df)
+            occupation_agg = summaries.aggregate_occupation(enriched_df)
+            credentials_agg = summaries.analyze_credentials(enriched_df)
+            top_n_agg = summaries.compute_top_n(enriched_df, n=10)
+
+            aggregates = {
+                'geography': geography_agg,
+                'occupation': occupation_agg,
+                'credentials': credentials_agg,
+                'top_n': top_n_agg
+            }
+
+            aggregates_output_dir = os.path.join(args.output_dir, "aggregates")
+            summaries.save_outputs(aggregates, aggregates_output_dir)
+            logging.info("Saved aggregated outputs to %s", aggregates_output_dir)
+        except Exception as e:
+            logging.error("Error during aggregation and saving outputs: %s", e, exc_info=True)
+        # --- End integration ---
 
         except Exception as e:
             logging.error("Error during processing: %s", e, exc_info=True)
