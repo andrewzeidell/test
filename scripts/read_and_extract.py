@@ -147,9 +147,25 @@ def process_file(file_path: str, output_dir: str, output_format: str) -> None:
         df = apply_transformations(df)
         logging.info("Applied transformations.")
 
-        onet_lookup = lookup_utils.load_lookup_csv("onet_lookup.csv")
-        df = lookup_utils.merge_lookup_pandas(df, onet_lookup, on="onet_code_normalized")
-        logging.info("Merged O*NET lookup table.")
+        # Load original lookup CSV files
+        stem_groups = lookup_utils.load_lookup_csv("STEM Groups in the BLS Projections.csv")
+        job_zones = lookup_utils.load_lookup_csv("ONET_Job_Zones.csv")
+        # Optionally load SOC codes if needed
+        # soc_codes = lookup_utils.load_lookup_csv("SOC_Codes.csv")
+
+        # Normalize and merge STEM groups
+        stem_groups = stem_groups.rename(columns={'SOC Code': 'soc2018_from_onet'})
+        df['onet_raw'] = df['classifications_onet_code_25'].fillna(df['classifications_onet_code'])
+        df['onet_norm'] = df['onet_raw'].astype(str).str.replace(r'[^0-9.\-]', '', regex=True).str.strip()
+        df['soc2018_from_onet'] = df['onet_norm'].astype(str).str.split('.').str[0]
+
+        df = lookup_utils.merge_lookup_pandas(df, stem_groups, on='soc2018_from_onet')
+
+        # Normalize and merge ONET job zones
+        job_zones = job_zones.rename(columns={'Code': 'onet_norm'})
+        df = lookup_utils.merge_lookup_pandas(df, job_zones, on='onet_norm')
+
+        logging.info("Merged original lookup CSV files.")
 
         os.makedirs(output_dir, exist_ok=True)
         base_name = os.path.splitext(os.path.basename(file_path))[0]
@@ -195,9 +211,25 @@ def main() -> None:
             df = apply_transformations(df)
             logging.info("Applied transformations.")
 
-            onet_lookup = lookup_utils.load_lookup_csv("onet_lookup.csv")
-            df = lookup_utils.merge_lookup_pandas(df, onet_lookup, on="onet_code_normalized")
-            logging.info("Merged O*NET lookup table.")
+            # Load original lookup CSV files
+            stem_groups = lookup_utils.load_lookup_csv("STEM Groups in the BLS Projections.csv")
+            job_zones = lookup_utils.load_lookup_csv("ONET_Job_Zones.csv")
+            # Optionally load SOC codes if needed
+            # soc_codes = lookup_utils.load_lookup_csv("SOC_Codes.csv")
+
+            # Normalize and merge STEM groups
+            stem_groups = stem_groups.rename(columns={'SOC Code': 'soc2018_from_onet'})
+            df['onet_raw'] = df['classifications_onet_code_25'].fillna(df['classifications_onet_code'])
+            df['onet_norm'] = df['onet_raw'].astype(str).str.replace(r'[^0-9.\-]', '', regex=True).str.strip()
+            df['soc2018_from_onet'] = df['onet_norm'].astype(str).str.split('.').str[0]
+
+            df = lookup_utils.merge_lookup_pandas(df, stem_groups, on='soc2018_from_onet')
+
+            # Normalize and merge ONET job zones
+            job_zones = job_zones.rename(columns={'Code': 'onet_norm'})
+            df = lookup_utils.merge_lookup_pandas(df, job_zones, on='onet_norm')
+
+            logging.info("Merged original lookup CSV files.")
 
             os.makedirs(args.output_dir, exist_ok=True)
             output_file = os.path.join(args.output_dir, f"cleaned_data.{args.format}")

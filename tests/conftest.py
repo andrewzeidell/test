@@ -75,18 +75,26 @@ def mock_lookup_csv(tmp_path):
     lookup_dir = tmp_path / "lookups"
     lookup_dir.mkdir()
 
-    onet_df = pd.DataFrame({
-        "onet_code": ["15-1121", "15-1132", "15-1141"],
-        "occupation": ["Software Developer", "Computer Systems Analyst", "Network Engineer"],
+    stem_groups_df = pd.DataFrame({
+        "SOC Code": ["15-1121", "15-1132", "15-1141"],
+        "STEM Group": ["Science", "Technology", "Engineering"],
     })
-    onet_file = lookup_dir / "onet_lookup.csv"
-    onet_df.to_csv(onet_file, index=False)
+    stem_groups_file = lookup_dir / "STEM Groups in the BLS Projections.csv"
+    stem_groups_df.to_csv(stem_groups_file, index=False)
 
-    stem_df = pd.DataFrame({
-        "stem_code": ["STEM1", "STEM2"],
-        "description": ["Science", "Technology"],
+    job_zones_df = pd.DataFrame({
+        "Code": ["15-1121", "15-1132", "15-1141"],
+        "Job Zone": ["Zone 1", "Zone 2", "Zone 3"],
     })
-    stem_file = lookup_dir / "stem_lookup.csv"
-    stem_df.to_csv(stem_file, index=False)
+    job_zones_file = lookup_dir / "ONET_Job_Zones.csv"
+    job_zones_df.to_csv(job_zones_file, index=False)
+
+    # Optionally create SOC_Codes.csv if needed
+    soc_codes_df = pd.DataFrame({
+        "SOC Code": ["15-1121", "15-1132", "15-1141"],
+        "Description": ["Desc1", "Desc2", "Desc3"],
+    })
+    soc_codes_file = lookup_dir / "SOC_Codes.csv"
+    soc_codes_df.to_csv(soc_codes_file, index=False)
 
     return lookup_dir

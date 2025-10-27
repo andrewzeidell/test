@@ -101,7 +101,7 @@ python scripts/read_and_extract.py --input_dir data/raw --output_dir data/clean
 
 - **Raw data:** Place raw parquet files in `data/raw/`. Files should be named with date patterns (e.g., `2022-06.parquet`) for filtering.
 
-- **Lookups:** Lookup CSV files (e.g., `onet_lookup.csv`) should be stored in a designated lookup directory (e.g., `data/lookups/` or as configured in `lookup_utils`).
+- **Lookups:** Lookup CSV files (e.g., `STEM Groups in the BLS Projections.csv`, `ONET_Job_Zones.csv`, `SOC_Codes.csv`) should be stored in a designated lookup directory (e.g., `data/lookups/` or as configured in `lookup_utils`).
 
 - **Output:** Cleaned and transformed data files are saved to the specified output directory (e.g., `data/clean/`), in parquet or feather format.
 

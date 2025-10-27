@@ -4,10 +4,10 @@ from src.reader.transforms import lookup_utils as lu
 
 def test_load_lookup_csv_success(tmp_path, mock_lookup_csv):
     # Use the mock lookup CSV directory fixture
-    onet_file = mock_lookup_csv / "onet_lookup.csv"
-    df = lu.load_lookup_csv("onet_lookup.csv", base_dir=str(mock_lookup_csv))
+    stem_groups_file = mock_lookup_csv / "STEM Groups in the BLS Projections.csv"
+    df = lu.load_lookup_csv("STEM Groups in the BLS Projections.csv", base_dir=str(mock_lookup_csv))
     assert not df.empty
-    assert "onet_code" in df.columns
+    assert "SOC Code" in df.columns
 
 def test_load_lookup_csv_file_not_found(tmp_path):
     with pytest.raises(FileNotFoundError):

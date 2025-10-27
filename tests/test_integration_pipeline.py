@@ -10,17 +10,27 @@ def test_full_pipeline(mock_parquet_dir, mock_lookup_csv):
     assert not df.empty
 
     # Load lookup tables
-    onet_lookup = lu.load_lookup_csv("onet_lookup.csv", base_dir=str(mock_lookup_csv))
-    stem_lookup = lu.load_lookup_csv("stem_lookup.csv", base_dir=str(mock_lookup_csv))
+    stem_groups = lu.load_lookup_csv("STEM Groups in the BLS Projections.csv", base_dir=str(mock_lookup_csv))
+    job_zones = lu.load_lookup_csv("ONET_Job_Zones.csv", base_dir=str(mock_lookup_csv))
+    # Optionally load SOC codes if needed
+    # soc_codes = lu.load_lookup_csv("SOC_Codes.csv", base_dir=str(mock_lookup_csv))
 
     # Normalize O*NET codes in main df
-    df["normalized_onet"] = df["classifications_onet_code"].apply(tf.normalize_onet_code)
+    df["onet_raw"] = df["classifications_onet_code_25"].fillna(df["classifications_onet_code"])
+    df["onet_norm"] = df["onet_raw"].astype(str).str.replace(r'[^0-9.\-]', '', regex=True).str.strip()
+    df["soc2018_from_onet"] = df["onet_norm"].astype(str).str.split('.').str[0]
 
-    # Merge O*NET lookup using pandas merge
-    df = lu.merge_lookup_pandas(df, onet_lookup, on="onet_code")
+    # Merge STEM groups
+    stem_groups = stem_groups.rename(columns={'SOC Code': 'soc2018_from_onet'})
+    df = lu.merge_lookup_pandas(df, stem_groups, on="soc2018_from_onet")
+
+    # Merge ONET job zones
+    job_zones = job_zones.rename(columns={'Code': 'onet_norm'})
+    df = lu.merge_lookup_pandas(df, job_zones, on="onet_norm")
 
     # Check merged columns
-    assert "occupation" in df.columns
+    assert "STEM Group" in df.columns
+    assert "Job Zone" in df.columns
 
     # Calculate posting age days for each row
     df["posting_age_days"] = df.apply(
