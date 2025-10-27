@@ -142,8 +142,15 @@ def process_file(file_path: str, output_dir: str, output_format: str) -> None:
             "ghostjob",
             "remote_flag",
         ]
-        df = read_parquet_files(file_path, None, columns)
+        # Fix: read_single_parquet_file expects a single file path and columns
+        from src.reader.etl import read_single_parquet_file
+
+        df = read_single_parquet_file(file_path, columns)
         logging.info("Read %d rows from %s", len(df), file_path)
+
+        # Remove remote flag usage since it does not exist currently
+        if "remote_flag" in df.columns:
+            df = df.drop(columns=["remote_flag"])
 
         df = apply_transformations(df)
         logging.info("Applied transformations.")
@@ -206,72 +213,80 @@ def main() -> None:
                 "ghostjob",
                 "remote_flag",
             ]
-            df = read_parquet_files(args.input_dir, args.date_pattern, columns)
-            logging.info("Read %d rows from parquet files.", len(df))
+            # Refactor CLI to process files individually for memory efficiency and per-file aggregation
+            files = find_parquet_files(args.input_dir, args.date_pattern)
+            logging.info("Found %d parquet files to process.", len(files))
 
-            df = apply_transformations(df)
-            logging.info("Applied transformations.")
+            for file_path in files:
+                try:
+                    logging.info("Processing file: %s", file_path)
+                    df = read_single_parquet_file(file_path, columns)
+                    logging.info("Read %d rows from %s", len(df), file_path)
 
-            # Load original lookup CSV files
-            stem_groups = lookup_utils.load_lookup_csv("STEM Groups in the BLS Projections.csv")
-            job_zones = lookup_utils.load_lookup_csv("ONET_Job_Zones.csv")
-            # Optionally load SOC codes if needed
-            # soc_codes = lookup_utils.load_lookup_csv("SOC_Codes.csv")
+                    # Remove remote flag usage since it does not exist currently
+                    if "remote_flag" in df.columns:
+                        df = df.drop(columns=["remote_flag"])
 
-            # Normalize and merge STEM groups
-            stem_groups = stem_groups.rename(columns={'SOC Code': 'soc2018_from_onet'})
-            df['onet_raw'] = df['classifications_onet_code_25'].fillna(df['classifications_onet_code'])
-            df['onet_norm'] = df['onet_raw'].astype(str).str.replace(r'[^0-9.\-]', '', regex=True).str.strip()
-            df['soc2018_from_onet'] = df['onet_norm'].astype(str).str.split('.').str[0]
+                    df = apply_transformations(df)
+                    logging.info("Applied transformations.")
 
-            df = lookup_utils.merge_lookup_pandas(df, stem_groups, on='soc2018_from_onet')
+                    # Load original lookup CSV files
+                    stem_groups = lookup_utils.load_lookup_csv("STEM Groups in the BLS Projections.csv")
+                    job_zones = lookup_utils.load_lookup_csv("ONET_Job_Zones.csv")
 
-            # Normalize and merge ONET job zones
-            job_zones = job_zones.rename(columns={'Code': 'onet_norm'})
-            df = lookup_utils.merge_lookup_pandas(df, job_zones, on='onet_norm')
+                    # Normalize and merge STEM groups
+                    stem_groups = stem_groups.rename(columns={'SOC Code': 'soc2018_from_onet'})
+                    df['onet_raw'] = df['classifications_onet_code_25'].fillna(df['classifications_onet_code'])
+                    df['onet_norm'] = df['onet_raw'].astype(str).str.replace(r'[^0-9.\-]', '', regex=True).str.strip()
+                    df['soc2018_from_onet'] = df['onet_norm'].astype(str).str.split('.').str[0]
 
-            logging.info("Merged original lookup CSV files.")
+                    df = lookup_utils.merge_lookup_pandas(df, stem_groups, on='soc2018_from_onet')
 
-            os.makedirs(args.output_dir, exist_ok=True)
-            output_file = os.path.join(args.output_dir, f"cleaned_data.{args.format}")
-            if args.format == "parquet":
-                df.to_parquet(output_file, index=False)
-            else:
-                df.to_feather(output_file)
-            logging.info("Saved cleaned data to %s", output_file)
-        except Exception as e:
-            logging.error("Error during processing: %s", e, exc_info=True)
-            sys.exit(1)
+                    # Normalize and merge ONET job zones
+                    job_zones = job_zones.rename(columns={'Code': 'onet_norm'})
+                    df = lookup_utils.merge_lookup_pandas(df, job_zones, on='onet_norm')
 
-        # --- Integration with summaries module ---
-        try:
-            logging.info("Starting data enrichment and aggregation using summaries module.")
-            lookups_dir = "data/raw"  # Assuming lookups are in raw data dir; adjust if needed
-            lookups = summaries.load_lookups(lookups_dir)
-            enriched_df = summaries.enrich_data(df, lookups)
-            enriched_df = summaries.calculate_posting_age(enriched_df)
-            enriched_df = summaries.normalize_pay(enriched_df)
+                    logging.info("Merged original lookup CSV files.")
 
-            # Aggregate data
-            geography_agg = summaries.aggregate_geography(enriched_df)
-            occupation_agg = summaries.aggregate_occupation(enriched_df)
-            credentials_agg = summaries.analyze_credentials(enriched_df)
-            top_n_agg = summaries.compute_top_n(enriched_df, n=10)
+                    os.makedirs(args.output_dir, exist_ok=True)
+                    base_name = os.path.splitext(os.path.basename(file_path))[0]
+                    output_file = os.path.join(args.output_dir, f"{base_name}_cleaned.{args.format}")
+                    if args.format == "parquet":
+                        df.to_parquet(output_file, index=False)
+                    else:
+                        df.to_feather(output_file)
+                    logging.info("Saved cleaned data to %s", output_file)
 
-            aggregates = {
-                'geography': geography_agg,
-                'occupation': occupation_agg,
-                'credentials': credentials_agg,
-                'top_n': top_n_agg
-            }
+                    # Perform aggregation per file/month using summaries module
+                    try:
+                        logging.info("Starting aggregation for file: %s", file_path)
+                        lookups_dir = "data/raw"  # Adjust if needed
+                        lookups = summaries.load_lookups(lookups_dir)
+                        enriched_df = summaries.enrich_data(df, lookups)
+                        enriched_df = summaries.calculate_posting_age(enriched_df)
+                        enriched_df = summaries.normalize_pay(enriched_df)
 
-            aggregates_output_dir = os.path.join(args.output_dir, "aggregates")
-            summaries.save_outputs(aggregates, aggregates_output_dir)
-            logging.info("Saved aggregated outputs to %s", aggregates_output_dir)
-        except Exception as e:
-            logging.error("Error during aggregation and saving outputs: %s", e, exc_info=True)
-        # --- End integration ---
+                        geography_agg = summaries.aggregate_geography(enriched_df)
+                        occupation_agg = summaries.aggregate_occupation(enriched_df)
+                        credentials_agg = summaries.analyze_credentials(enriched_df)
+                        top_n_agg = summaries.compute_top_n(enriched_df, n=10)
 
+                        aggregates = {
+                            'geography': geography_agg,
+                            'occupation': occupation_agg,
+                            'credentials': credentials_agg,
+                            'top_n': top_n_agg
+                        }
+
+                        aggregates_output_dir = os.path.join(args.output_dir, "aggregates", base_name)
+                        summaries.save_outputs(aggregates, aggregates_output_dir)
+                        logging.info("Saved aggregated outputs to %s", aggregates_output_dir)
+                    except Exception as e:
+                        logging.error("Error during aggregation for file %s: %s", file_path, e, exc_info=True)
+
+                except Exception as e:
+                    logging.error("Error processing file %s: %s", file_path, e, exc_info=True)
+                    continue
         except Exception as e:
             logging.error("Error during processing: %s", e, exc_info=True)
             sys.exit(1)
