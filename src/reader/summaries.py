@@ -463,37 +463,69 @@ def compute_top_n(df: pd.DataFrame, n: int) -> dict:
     }
 
 
-def save_outputs(aggregates: dict, output_dir: str) -> None:
+from typing import Optional
+import logging
+
+def save_aggregates_with_posting_and_htf(
+    aggregates: dict,
+    posting_age_agg: Optional[pd.DataFrame],
+    hard_to_fill_agg: Optional[pd.DataFrame],
+    output_dir: str
+) -> None:
     """
-    Save aggregated data to CSV and Excel files.
+    Save aggregated data including posting age trends and hard-to-fill signals to CSV files.
 
     Args:
         aggregates (dict): Dictionary of aggregated DataFrames.
+        posting_age_agg (Optional[pd.DataFrame]): Posting age trend aggregate DataFrame.
+        hard_to_fill_agg (Optional[pd.DataFrame]): Hard-to-fill signal aggregate DataFrame.
         output_dir (str): Directory path to save output files.
     """
     os.makedirs(output_dir, exist_ok=True)
 
-    # Save geography aggregates
-    geo = aggregates.get('geography', {})
-    for level, dfs in geo.items():
-        for name, df in dfs.items():
-            csv_path = os.path.join(output_dir, f"{level}_{name}.csv")
+    try:
+        # Save posting age trend aggregates
+        if posting_age_agg is not None and not posting_age_agg.empty:
+            posting_age_path = os.path.join(output_dir, "posting_age_trends.csv")
+            posting_age_agg.to_csv(posting_age_path, index=False)
+            logging.info(f"Saved posting age trends to {posting_age_path}")
+        else:
+            logging.warning("No posting age trend data to save.")
+
+        # Save hard-to-fill aggregates
+        if hard_to_fill_agg is not None and not hard_to_fill_agg.empty:
+            htf_path = os.path.join(output_dir, "hard_to_fill_signals.csv")
+            hard_to_fill_agg.to_csv(htf_path, index=False)
+            logging.info(f"Saved hard-to-fill signals to {htf_path}")
+        else:
+            logging.warning("No hard-to-fill signal data to save.")
+
+        # Save other aggregates as before
+        # Save geography aggregates
+        geo = aggregates.get('geography', {})
+        for level, dfs in geo.items():
+            for name, df in dfs.items():
+                csv_path = os.path.join(output_dir, f"{level}_{name}.csv")
+                df.to_csv(csv_path, index=False)
+
+        # Save occupation aggregates
+        occ = aggregates.get('occupation', {})
+        for name, df in occ.items():
+            csv_path = os.path.join(output_dir, f"occupation_{name}.csv")
             df.to_csv(csv_path, index=False)
 
-    # Save occupation aggregates
-    occ = aggregates.get('occupation', {})
-    for name, df in occ.items():
-        csv_path = os.path.join(output_dir, f"occupation_{name}.csv")
-        df.to_csv(csv_path, index=False)
+        # Save credentials aggregates
+        creds = aggregates.get('credentials', {})
+        for name, df in creds.items():
+            csv_path = os.path.join(output_dir, f"credentials_{name}.csv")
+            df.to_csv(csv_path, index=False)
 
-    # Save credentials aggregates
-    creds = aggregates.get('credentials', {})
-    for name, df in creds.items():
-        csv_path = os.path.join(output_dir, f"credentials_{name}.csv")
-        df.to_csv(csv_path, index=False)
+        # Save top-N aggregates
+        topn = aggregates.get('top_n', {})
+        for name, df in topn.items():
+            csv_path = os.path.join(output_dir, f"topn_{name}.csv")
+            df.to_csv(csv_path, index=False)
 
-    # Save top-N aggregates
-    topn = aggregates.get('top_n', {})
-    for name, df in topn.items():
-        csv_path = os.path.join(output_dir, f"topn_{name}.csv")
-        df.to_csv(csv_path, index=False)
+    except Exception as e:
+        logging.error(f"Error saving aggregates: {e}")
+        raise
