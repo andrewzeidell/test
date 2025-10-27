@@ -1,5 +1,7 @@
 from datetime import datetime
 from typing import Optional, Union
+import unicodedata
+import pandas as pd
 
 
 def calculate_posting_age_days(
@@ -183,12 +185,39 @@ def clean_education_field(education: Optional[str]) -> Optional[str]:
     if education is None:
         return None
 
-    cleaned = education.strip().lower()
+    # Normalize unicode characters to NFKC form
+    normalized = unicodedata.normalize('NFKC', education)
+
+    # Replace common problematic apostrophe-like characters with standard apostrophe
+    replacements = {
+        '\u2018': "'",  # left single quotation mark
+        '\u2019': "'",  # right single quotation mark
+        '\u201B': "'",  # single high-reversed-9 quotation mark
+        '\u2032': "'",  # prime
+        '\u02BC': "'",  # modifier letter apostrophe
+        '\uFF07': "'",  # fullwidth apostrophe
+    }
+    for old, new in replacements.items():
+        normalized = normalized.replace(old, new)
+
+    cleaned = normalized.strip().lower()
     if cleaned == "":
         return None
 
-    # Additional normalization can be added here if needed
     return cleaned
+
+
+def clean_education_column(education_series: pd.Series) -> pd.Series:
+    """
+    Apply clean_education_field to a pandas Series of education strings.
+
+    Args:
+        education_series (pd.Series): Series of raw education requirement strings.
+
+    Returns:
+        pd.Series: Series of cleaned education strings.
+    """
+    return education_series.apply(clean_education_field)
 
 
 def clean_experience_field(experience: Optional[str]) -> Optional[str]:

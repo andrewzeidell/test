@@ -12,13 +12,12 @@ import argparse
 import logging
 import os
 import sys
-from typing import Optional
+from typing import Optional, List
 
 import pandas as pd
 
-from src.reader.etl import read_parquet_files
-from src.reader.transforms import transformations
-from src.reader.transforms import lookup_utils
+from src.reader.etl import read_single_parquet_file, MINIMAL_COLUMNS
+from src.reader.transforms import transformations, lookup_utils
 from src.reader import summaries
 
 
@@ -97,9 +96,6 @@ def apply_transformations(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-from typing import List, Optional
-import glob
-
 def find_parquet_files(input_dir: str, date_pattern: Optional[str] = None) -> List[str]:
     """Recursively find parquet files in input_dir matching the optional date_pattern.
 
@@ -110,6 +106,8 @@ def find_parquet_files(input_dir: str, date_pattern: Optional[str] = None) -> Li
     Returns:
         List of matching parquet file paths.
     """
+    import glob
+
     pattern = "**/*.parquet"
     all_files = glob.glob(os.path.join(input_dir, pattern), recursive=True)
     if date_pattern:
@@ -120,7 +118,7 @@ def find_parquet_files(input_dir: str, date_pattern: Optional[str] = None) -> Li
 
 
 def process_file(file_path: str, output_dir: str, output_format: str) -> None:
-    """Process a single parquet file: read, transform, merge lookups, and save.
+    """Process a single parquet file: read, transform, merge lookups, filter STEM jobs, and save.
 
     Args:
         file_path: Path to the parquet file.
@@ -129,10 +127,7 @@ def process_file(file_path: str, output_dir: str, output_format: str) -> None:
     """
     logging.info("Processing file: %s", file_path)
     try:
-        from src.reader.etl import MINIMAL_COLUMNS
         columns = MINIMAL_COLUMNS
-        # Fix: read_single_parquet_file expects a single file path and columns
-        from src.reader.etl import read_single_parquet_file
 
         df = read_single_parquet_file(file_path, columns)
         logging.info("Read %d rows from %s", len(df), file_path)
@@ -157,6 +152,13 @@ def process_file(file_path: str, output_dir: str, output_format: str) -> None:
         df['soc2018_from_onet'] = df['onet_norm'].astype(str).str.split('.').str[0]
 
         df = lookup_utils.merge_lookup_pandas(df, stem_groups, on='soc2018_from_onet')
+
+        # Filter STEM jobs using filter_stem_jobs from summaries.py
+        try:
+            df = summaries.filter_stem_jobs(df, stem_groups)
+            logging.info("Filtered STEM jobs. Rows after filtering: %d", len(df))
+        except Exception as e:
+            logging.error("Error filtering STEM jobs for file %s: %s", file_path, e, exc_info=True)
 
         # Normalize and merge ONET job zones
         job_zones = job_zones.rename(columns={'Code': 'onet_norm'})
@@ -189,7 +191,6 @@ def main() -> None:
         args = parse_args()
         logging.info("Starting read_and_extract with args: %s", args)
         try:
-            from src.reader.etl import MINIMAL_COLUMNS
             columns = MINIMAL_COLUMNS
             # Refactor CLI to process files individually for memory efficiency and per-file aggregation
             files = find_parquet_files(args.input_dir, args.date_pattern)
@@ -220,6 +221,13 @@ def main() -> None:
 
                     df = lookup_utils.merge_lookup_pandas(df, stem_groups, on='soc2018_from_onet')
 
+                    # Filter STEM jobs using filter_stem_jobs from summaries.py
+                    try:
+                        df = summaries.filter_stem_jobs(df, stem_groups)
+                        logging.info("Filtered STEM jobs. Rows after filtering: %d", len(df))
+                    except Exception as e:
+                        logging.error("Error filtering STEM jobs for file %s: %s", file_path, e, exc_info=True)
+
                     # Normalize and merge ONET job zones
                     job_zones = job_zones.rename(columns={'Code': 'onet_norm'})
                     df = lookup_utils.merge_lookup_pandas(df, job_zones, on='onet_norm')
@@ -241,6 +249,15 @@ def main() -> None:
                         lookups_dir = "data/raw"  # Adjust if needed
                         lookups = summaries.load_lookups(lookups_dir)
                         enriched_df = summaries.enrich_data(df, lookups)
+
+                        # Filter STEM jobs before further processing
+                        try:
+                            stem_groups_agg = lookups.get('stem_groups')
+                            enriched_df = summaries.filter_stem_jobs(enriched_df, stem_groups_agg)
+                            logging.info("Filtered STEM jobs in aggregation. Rows after filtering: %d", len(enriched_df))
+                        except Exception as e:
+                            logging.error("Error filtering STEM jobs during aggregation for file %s: %s", file_path, e, exc_info=True)
+
                         enriched_df = summaries.calculate_posting_age(enriched_df)
                         enriched_df = summaries.normalize_pay(enriched_df)
 

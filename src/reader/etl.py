@@ -102,6 +102,8 @@ def read_parquet_files(
     return combined_df
 
 
+from src.reader.transforms.transformations import clean_education_column
+
 def load_parquet_data(
     directory: str, date_pattern: Optional[str] = None, columns: Optional[List[str]] = None
 ) -> pd.DataFrame:
@@ -126,6 +128,11 @@ def load_parquet_data(
 
     # For backward compatibility, still read all files combined
     df = read_parquet_files(file_paths, columns)
+
+    # Clean education field column if present
+    if 'requirements_min_education' in df.columns:
+        df['requirements_min_education'] = clean_education_column(df['requirements_min_education'])
+
     return df
 
 

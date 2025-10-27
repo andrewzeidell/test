@@ -158,6 +158,60 @@ def normalize_pay(df: pd.DataFrame) -> pd.DataFrame:
             - pay_min_hr
             - pay_max_hr
     """
+
+def aggregate_posting_age_trends(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Aggregate posting age trends over time by month.
+
+    Args:
+        df (pd.DataFrame): DataFrame with 'date_acquired' and 'Post_Age' columns.
+
+    Returns:
+        pd.DataFrame: DataFrame indexed by month with average and median posting age.
+    """
+    df = df.copy()
+    df['date_acquired'] = pd.to_datetime(df['date_acquired'], utc=True, errors='coerce')
+    df = df.dropna(subset=['date_acquired', 'Post_Age'])
+    df['month'] = df['date_acquired'].dt.to_period('M')
+
+    agg = df.groupby('month')['Post_Age'].agg(['mean', 'median', 'count']).reset_index()
+    agg['month'] = agg['month'].dt.to_timestamp()
+    agg = agg.rename(columns={'mean': 'avg_posting_age', 'median': 'median_posting_age', 'count': 'postings_count'})
+    return agg
+
+def detect_hard_to_fill(df: pd.DataFrame, age_threshold: int = 30, min_postings: int = 10) -> pd.DataFrame:
+    """
+    Detect hard-to-fill job postings based on posting age and expiration.
+
+    Args:
+        df (pd.DataFrame): DataFrame with 'Post_Age' and 'expired' columns.
+        age_threshold (int): Minimum posting age in days to consider hard-to-fill.
+        min_postings (int): Minimum number of postings to consider for aggregation.
+
+    Returns:
+        pd.DataFrame: Aggregated DataFrame by 'onet_norm' with hard-to-fill signals.
+    """
+    df = df.copy()
+    df = df.dropna(subset=['Post_Age', 'onet_norm'])
+
+    # Filter postings that are expired and have posting age above threshold
+    hard_to_fill_mask = (df['expired'] == 1) & (df['Post_Age'] >= age_threshold)
+    hard_to_fill_df = df[hard_to_fill_mask]
+
+    # Aggregate by occupation code
+    agg = hard_to_fill_df.groupby('onet_norm').agg(
+        hard_to_fill_count=pd.NamedAgg(column='Post_Age', aggfunc='count'),
+        avg_posting_age=pd.NamedAgg(column='Post_Age', aggfunc='mean'),
+        median_posting_age=pd.NamedAgg(column='Post_Age', aggfunc='median')
+    ).reset_index()
+
+    # Filter occupations with at least min_postings hard-to-fill postings
+    agg = agg[agg['hard_to_fill_count'] >= min_postings]
+
+    # Sort descending by hard_to_fill_count
+    agg = agg.sort_values(by='hard_to_fill_count', ascending=False)
+
+    return agg
     def normalize_to_hourly(row):
         unit = str(row['parameters_salary_unit']).upper()
         min_v, max_v = row['parameters_salary_min'], row['parameters_salary_max']

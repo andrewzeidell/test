@@ -45,6 +45,14 @@ def test_clean_education_field():
     assert tf.clean_education_field(" ") is None
     assert tf.clean_education_field(None) is None
 
+    # Additional tests for Unicode normalization and apostrophe replacement
+    assert tf.clean_education_field("Bachelor\u2019s Degree") == "bachelor's degree"  # right single quotation mark
+    assert tf.clean_education_field("Bachelor\u2018s Degree") == "bachelor's degree"  # left single quotation mark
+    assert tf.clean_education_field("Bachelor\u201Bs Degree") == "bachelor's degree"  # single high-reversed-9 quotation mark
+    assert tf.clean_education_field("Bachelor\u2032s Degree") == "bachelor's degree"  # prime
+    assert tf.clean_education_field("Bachelor\u02BCs Degree") == "bachelor's degree"  # modifier letter apostrophe
+    assert tf.clean_education_field("Bachelor\uFF07s Degree") == "bachelor's degree"  # fullwidth apostrophe
+
 def test_clean_experience_field():
     assert tf.clean_experience_field(" 3 Years ") == "3 years"
     assert tf.clean_experience_field("") is None
