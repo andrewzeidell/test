@@ -116,7 +116,7 @@ def filter_stem_jobs(df: pd.DataFrame, stem_groups: pd.DataFrame | None) -> pd.D
     before_n = len(df)
     filtered_df = df[df['soc2018_from_onet'].isin(allow_soc)]
     after_n = len(filtered_df)
-    print(f"\\nFiltered by SOC allowlist for STEM. Rows kept: {after_n} of {before_n}")
+    print(f"\nFiltered by SOC allowlist for STEM. Rows kept: {after_n} of {before_n}")
 
     return filtered_df
 
@@ -143,6 +143,26 @@ def calculate_posting_age(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def normalize_to_hourly(row):
+    unit = str(row['parameters_salary_unit']).upper()
+    min_v, max_v = row['parameters_salary_min'], row['parameters_salary_max']
+
+    conversions = {
+        'HOURLY': 1, 'HOUR': 1, 'DAILY': 1 / 8, 'DAY': 1 / 8,
+        'WEEKLY': 1 / 40, 'WEEK': 1 / 40, 'BIWEEKLY': 1 / 80,
+        'MONTHLY': 1 / 173.3333, 'MONTH': 1 / 173.3333,
+        'YEARLY': 1 / 2080, 'YEAR': 1 / 2080, 'ANNUAL': 1 / 2080
+    }
+
+    conv = conversions.get(unit, None)
+
+    if conv:
+        return pd.Series([min_v * conv if pd.notna(min_v) else pd.NA,
+                          max_v * conv if pd.notna(max_v) else pd.NA])
+    else:
+        return pd.Series([pd.NA, pd.NA])
+
+
 def normalize_pay(df: pd.DataFrame) -> pd.DataFrame:
     """
     Normalize pay fields to hourly rates where feasible.
@@ -158,6 +178,15 @@ def normalize_pay(df: pd.DataFrame) -> pd.DataFrame:
             - pay_min_hr
             - pay_max_hr
     """
+    if all(col in df.columns for col in ["parameters_salary_min", "parameters_salary_max", "parameters_salary_unit"]):
+        pay_cols = df.apply(normalize_to_hourly, axis=1)
+        pay_cols.columns = ['pay_min_hr', 'pay_max_hr']
+        df = pd.concat([df, pay_cols], axis=1)
+    else:
+        df['pay_min_hr'] = pd.NA
+        df['pay_max_hr'] = pd.NA
+
+    return df
 
 def aggregate_posting_age_trends(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -212,34 +241,63 @@ def detect_hard_to_fill(df: pd.DataFrame, age_threshold: int = 30, min_postings:
     agg = agg.sort_values(by='hard_to_fill_count', ascending=False)
 
     return agg
-    def normalize_to_hourly(row):
-        unit = str(row['parameters_salary_unit']).upper()
-        min_v, max_v = row['parameters_salary_min'], row['parameters_salary_max']
 
-        conversions = {
-            'HOURLY': 1, 'HOUR': 1, 'DAILY': 1 / 8, 'DAY': 1 / 8,
-            'WEEKLY': 1 / 40, 'WEEK': 1 / 40, 'BIWEEKLY': 1 / 80,
-            'MONTHLY': 1 / 173.3333, 'MONTH': 1 / 173.3333,
-            'YEARLY': 1 / 2080, 'YEAR': 1 / 2080, 'ANNUAL': 1 / 2080
-        }
 
-        conv = conversions.get(unit, None)
+def detect_hard_to_fill_by_geography(
+    df: pd.DataFrame,
+    geography_level: str,
+    age_threshold: int = 30,
+    min_postings: int = 10
+) -> pd.DataFrame:
+    """
+    Detect hard-to-fill job postings by geography level (state, city, or zip).
 
-        if conv:
-            return pd.Series([min_v * conv if pd.notna(min_v) else pd.NA,
-                              max_v * conv if pd.notna(max_v) else pd.NA])
-        else:
-            return pd.Series([pd.NA, pd.NA])
+    Args:
+        df (pd.DataFrame): DataFrame with 'Post_Age', 'expired', and geography columns.
+        geography_level (str): One of 'state', 'city', or 'zip'.
+        age_threshold (int): Minimum posting age in days to consider hard-to-fill.
+        min_postings (int): Minimum number of postings to consider for aggregation.
 
-    if all(col in df.columns for col in ["parameters_salary_min", "parameters_salary_max", "parameters_salary_unit"]):
-        pay_cols = df.apply(normalize_to_hourly, axis=1)
-        pay_cols.columns = ['pay_min_hr', 'pay_max_hr']
-        df = pd.concat([df, pay_cols], axis=1)
-    else:
-        df['pay_min_hr'] = pd.NA
-        df['pay_max_hr'] = pd.NA
+    Returns:
+        pd.DataFrame: Aggregated DataFrame with hard-to-fill signals grouped by geography and occupation.
+    """
+    df = df.copy()
+    df = df.dropna(subset=['Post_Age', 'onet_norm'])
 
-    return df
+    # Validate geography_level
+    valid_levels = ['state', 'city', 'zip']
+    if geography_level not in valid_levels:
+        raise ValueError(f"Invalid geography_level '{geography_level}'. Must be one of {valid_levels}.")
+
+    # Map geography_level to actual column names in df
+    geo_col_map = {
+        'state': 'state',
+        'city': 'City',
+        'zip': 'Zip'
+    }
+    geo_col = geo_col_map[geography_level]
+
+    # Drop rows with missing geography
+    df = df.dropna(subset=[geo_col])
+
+    # Filter postings that are expired and have posting age above threshold
+    hard_to_fill_mask = (df['expired'] == 1) & (df['Post_Age'] >= age_threshold)
+    hard_to_fill_df = df[hard_to_fill_mask]
+
+    # Aggregate by geography and occupation code
+    agg = hard_to_fill_df.groupby([geo_col, 'onet_norm']).agg(
+        hard_to_fill_count=pd.NamedAgg(column='Post_Age', aggfunc='count'),
+        avg_posting_age=pd.NamedAgg(column='Post_Age', aggfunc='mean'),
+        median_posting_age=pd.NamedAgg(column='Post_Age', aggfunc='median')
+    ).reset_index()
+
+    # Filter groups with at least min_postings hard-to-fill postings
+    agg = agg[agg['hard_to_fill_count'] >= min_postings]
+
+    # Sort descending by hard_to_fill_count
+    agg = agg.sort_values(by='hard_to_fill_count', ascending=False)
+
+    return agg
 
 
 def filter_ghost_jobs(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:

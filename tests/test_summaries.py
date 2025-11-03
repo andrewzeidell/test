@@ -90,3 +90,39 @@ def test_save_aggregates_with_posting_and_htf(tmp_path):
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+def test_detect_hard_to_fill_by_geography():
+    data = {
+        'Post_Age': [10, 35, 40, 5, 50, 45],
+        'expired': [1, 1, 1, 0, 1, 1],
+        'onet_norm': ['111', '111', '222', '222', '111', '222'],
+        'state': ['CA', 'CA', 'NY', 'NY', 'CA', 'NY'],
+        'City': ['Los Angeles', 'Los Angeles', 'New York', 'New York', 'San Francisco', 'New York'],
+        'Zip': ['90001', '90001', '10001', '10001', '94101', '10001']
+    }
+    df = pd.DataFrame(data)
+
+    # Test by state
+    result_state = summaries.detect_hard_to_fill_by_geography(df, 'state', age_threshold=30, min_postings=1)
+    assert not result_state.empty
+    assert 'hard_to_fill_count' in result_state.columns
+    assert 'avg_posting_age' in result_state.columns
+    assert 'median_posting_age' in result_state.columns
+    assert 'state' in result_state.columns
+    assert 'onet_norm' in result_state.columns
+    assert 'CA' in result_state['state'].values
+    assert 'NY' in result_state['state'].values
+
+    # Test by city
+    result_city = summaries.detect_hard_to_fill_by_geography(df, 'city', age_threshold=30, min_postings=1)
+    assert not result_city.empty
+    assert 'City' in result_city.columns
+    assert 'Los Angeles' in result_city['City'].values
+    assert 'New York' in result_city['City'].values
+
+    # Test by zip
+    result_zip = summaries.detect_hard_to_fill_by_geography(df, 'zip', age_threshold=30, min_postings=1)
+    assert not result_zip.empty
+    assert 'Zip' in result_zip.columns
+    assert '90001' in result_zip['Zip'].values
+    assert '10001' in result_zip['Zip'].values
