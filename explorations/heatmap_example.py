@@ -31,6 +31,30 @@ def load_shapefile(geography_level: str) -> gpd.GeoDataFrame:
     else:
         raise ValueError(f"Unsupported geography level: {geography_level}")
 
+def filter_top_onet_per_geography(
+    df: pd.DataFrame,
+    geography_col: str,
+    category_col: str = 'onet_norm',
+    count_col: str = 'hard_to_fill_count'
+) -> pd.DataFrame:
+    """
+    Filter the DataFrame to keep only the top ONET code by hard-to-fill count per geography unit.
+
+    Args:
+        df (pd.DataFrame): Input DataFrame with geography, category, and count columns.
+        geography_col (str): Column name for geography unit (e.g., 'state', 'zip', or 'fips_code').
+        category_col (str): Column name for job category.
+        count_col (str): Column name for hard-to-fill count.
+
+    Returns:
+        pd.DataFrame: Filtered DataFrame with only the top ONET code per geography.
+    """
+    # Sort by geography, count descending
+    df_sorted = df.sort_values([geography_col, count_col], ascending=[True, False])
+    # Keep top row per geography
+    top_df = df_sorted.groupby(geography_col).head(1).reset_index(drop=True)
+    return top_df
+
 def plot_hard_to_fill_heatmap(
     df: pd.DataFrame,
     geography_level: str = 'state',
@@ -38,7 +62,8 @@ def plot_hard_to_fill_heatmap(
     state_fips_csv: str = None
 ):
     """
-    Plot a geographic heatmap of hard-to-fill jobs by geography and job category.
+    Plot a geographic heatmap of hard-to-fill jobs by geography and job category,
+    showing only the top ONET code by hard-to-fill count per geography unit.
 
     Args:
         df (pd.DataFrame): DataFrame with columns for geography, job category, and hard-to-fill count.
@@ -63,7 +88,8 @@ def plot_hard_to_fill_heatmap(
         join_left = geography_col
         join_right = 'STATEFP'
     elif geography_level == 'zip':
-        join_left = 'zip'
+        geography_col = 'zip'
+        join_left = geography_col
         join_right = 'ZCTA5CE20'
     elif geography_level == 'city':
         # Placeholder for city-level join keys
@@ -71,14 +97,17 @@ def plot_hard_to_fill_heatmap(
     else:
         raise ValueError(f"Unsupported geography level: {geography_level}")
 
-    # Aggregate data by geography and category
-    agg = df.groupby([join_left, category_col])['hard_to_fill_count'].sum().reset_index()
+    # Filter to top ONET code per geography unit
+    df_top = filter_top_onet_per_geography(df, geography_col, category_col, 'hard_to_fill_count')
+
+    # Aggregate data by geography and category (should be single row per geography after filtering)
+    agg = df_top.groupby([join_left, category_col])['hard_to_fill_count'].sum().reset_index()
 
     # Merge aggregated data with shapefile
     merged = geo_df.merge(agg, left_on=join_right, right_on=join_left, how='left')
     merged['hard_to_fill_count'] = merged['hard_to_fill_count'].fillna(0)
 
-    # Create a color map for categories
+    # Create a color map for categories (only top categories)
     categories = agg[category_col].unique()
     colors = plt.cm.get_cmap('tab20', len(categories))
     color_map = {cat: colors(i) for i, cat in enumerate(categories)}
@@ -100,7 +129,7 @@ def plot_hard_to_fill_heatmap(
             label=cat
         )
 
-    ax.set_title(f'Hard-to-Fill Jobs Heatmap by {geography_level.capitalize()} and Job Category')
+    ax.set_title(f'Hard-to-Fill Jobs Heatmap by {geography_level.capitalize()} and Top Job Category')
     ax.axis('off')
     ax.legend(title='Job Category', loc='lower left')
 
@@ -147,3 +176,7 @@ if __name__ == "__main__":
 
     # Plot zip-level heatmap
     plot_hard_to_fill_heatmap(df_zip, geography_level='zip', category_col='onet_norm')
+
+    # Example usage demonstrating filtering to top ONET code per geography unit
+    print("Example: Plotting only top ONET code per state by hard-to-fill count")
+    plot_hard_to_fill_heatmap(df_state, geography_level='state', category_col='onet_norm', state_fips_csv=state_fips_csv_path)
