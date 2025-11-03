@@ -1,104 +1,70 @@
-"""
-Placeholder for lookup merge utilities.
-
-This module will provide helper functions to merge lookup tables
-(e.g., O*NET and STEM lookups) with the main dataset.
-"""
-
-import os
-from typing import Optional, Union, Tuple
 import pandas as pd
-import duckdb
+from typing import Optional
 
-LOOKUP_BASE_DIR = os.path.join("data", "lookups")
 
-def load_lookup_csv(filename: str, base_dir: Optional[str] = None) -> pd.DataFrame:
-    """
-    Load a CSV lookup table from the configured lookups directory.
-
-    Args:
-        filename (str): The CSV filename to load.
-        base_dir (Optional[str]): Base directory for lookups. Defaults to data/lookups/.
-
-    Returns:
-        pd.DataFrame: Loaded lookup table as a DataFrame.
-
-    Raises:
-        FileNotFoundError: If the CSV file does not exist.
-    """
-    directory = base_dir if base_dir is not None else LOOKUP_BASE_DIR
-    filepath = os.path.join(directory, filename)
-    if not os.path.isfile(filepath):
-        raise FileNotFoundError(f"Lookup CSV file not found: {filepath}")
-    return pd.read_csv(filepath)
-
-def merge_lookup_pandas(
-    main_df: pd.DataFrame,
-    lookup_df: pd.DataFrame,
-    on: Union[str, list[str]],
-    how: str = "left",
-    suffixes: Tuple[str, str] = ("", "_lookup"),
+def add_fips_code_from_csv(
+    df: pd.DataFrame,
+    csv_path: str,
+    state_abbr_col: str,
+    fips_code_col: str = "fips_code",
+    csv_state_abbr_col: str = "state_abbr",
+    csv_fips_code_col: str = "fips_code",
 ) -> pd.DataFrame:
     """
-    Merge a lookup DataFrame into the main DataFrame using Pandas merge.
+    Add a FIPS code column to a DataFrame by merging with a CSV file containing state abbreviation to FIPS code mappings.
 
-    Args:
-        main_df (pd.DataFrame): The main job postings DataFrame.
-        lookup_df (pd.DataFrame): The lookup DataFrame to merge.
-        on (Union[str, list[str]]): Column name(s) to join on.
-        how (str): Type of merge to perform. Defaults to 'left'.
-        suffixes (Tuple[str, str]): Suffixes to apply to overlapping columns.
+    This function reads the CSV file at `csv_path` which should contain at least two columns:
+    one for state abbreviations and one for corresponding FIPS codes. It merges this mapping
+    with the input DataFrame `df` on the specified state abbreviation columns.
 
-    Returns:
-        pd.DataFrame: The merged DataFrame.
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input DataFrame containing a column with state abbreviations.
+    csv_path : str
+        Path to the CSV file containing state abbreviation to FIPS code mappings.
+    state_abbr_col : str
+        Name of the column in `df` containing state abbreviations.
+    fips_code_col : str, optional
+        Name of the new column to add to `df` for FIPS codes, by default "fips_code".
+    csv_state_abbr_col : str, optional
+        Name of the state abbreviation column in the CSV file, by default "state_abbr".
+    csv_fips_code_col : str, optional
+        Name of the FIPS code column in the CSV file, by default "fips_code".
+
+    Returns
+    -------
+    pd.DataFrame
+        A new DataFrame with the FIPS code column added. Rows with unmatched or missing state abbreviations
+        will have NaN in the FIPS code column.
+
+    Example
+    -------
+    >>> import pandas as pd
+    >>> df = pd.DataFrame({"state": ["CA", "NY", "TX", "ZZ"]})
+    >>> df_with_fips = add_fips_code_from_csv(df, "state_fips.csv", "state")
+    >>> print(df_with_fips)
+      state fips_code
+    0    CA       06
+    1    NY       36
+    2    TX       48
+    3    ZZ      NaN
     """
-    return main_df.merge(lookup_df, on=on, how=how, suffixes=suffixes)
+    # Read the CSV mapping file
+    mapping_df = pd.read_csv(csv_path, dtype={csv_state_abbr_col: str, csv_fips_code_col: str})
 
-def merge_lookup_duckdb(
-    main_df: pd.DataFrame,
-    lookup_df: pd.DataFrame,
-    on: Union[str, list[str]],
-    how: str = "left",
-) -> pd.DataFrame:
-    """
-    Merge a lookup DataFrame into the main DataFrame using DuckDB SQL JOIN.
-
-    Args:
-        main_df (pd.DataFrame): The main job postings DataFrame.
-        lookup_df (pd.DataFrame): The lookup DataFrame to merge.
-        on (Union[str, list[str]]): Column name(s) to join on.
-        how (str): Type of join to perform. Defaults to 'left'.
-
-    Returns:
-        pd.DataFrame: The merged DataFrame.
-    """
-    con = duckdb.connect()
-    con.register("main_df", main_df)
-    con.register("lookup_df", lookup_df)
-
-    if isinstance(on, str):
-        on = [on]
-
-    join_condition = " AND ".join(
-        [f"main_df.{col} = lookup_df.{col}" for col in on]
+    # Merge the input DataFrame with the mapping DataFrame on state abbreviation columns
+    merged_df = df.merge(
+        mapping_df[[csv_state_abbr_col, csv_fips_code_col]],
+        how="left",
+        left_on=state_abbr_col,
+        right_on=csv_state_abbr_col,
     )
 
-    query = f"""
-    SELECT main_df.*, lookup_df.*
-    FROM main_df
-    {how.upper()} JOIN lookup_df
-    ON {join_condition}
-    """
+    # Rename the FIPS code column to the desired output column name
+    merged_df = merged_df.rename(columns={csv_fips_code_col: fips_code_col})
 
-    result_df = con.execute(query).df()
+    # Drop the extra state abbreviation column from the CSV mapping
+    merged_df = merged_df.drop(columns=[csv_state_abbr_col])
 
-    # Drop duplicate join columns from lookup_df to avoid redundancy
-    for col in on:
-        if col in result_df.columns and f"{col}_1" in result_df.columns:
-            result_df.drop(columns=[f"{col}_1"], inplace=True)
-
-    con.unregister("main_df")
-    con.unregister("lookup_df")
-    con.close()
-
-    return result_df
+    return merged_df
