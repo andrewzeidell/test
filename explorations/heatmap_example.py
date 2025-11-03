@@ -1,5 +1,7 @@
 import pandas as pd
 import geopandas as gpd
+import geodatasets as gds
+from geodatasets import get_path
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 
@@ -16,8 +18,11 @@ def plot_hard_to_fill_heatmap(df: pd.DataFrame, geography_col: str = 'state', ca
         None: Displays a matplotlib plot.
     """
     # Load US states shapefile from geopandas datasets
-    usa = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
-    usa = usa[usa['name'] == 'United States of America']
+    # print(sorted(gds.data.flatten().keys()))
+    # exit()
+    geo_path = get_path("naturalearth.land")
+    usa = gpd.read_file(geo_path)
+    # usa = usa[usa['name'] == 'United States of America']
 
     # For state-level, use built-in states shapefile from geopandas or external source
     # Here we use a common US states shapefile from geopandas datasets (requires geopandas 0.10+)
