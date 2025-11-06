@@ -350,7 +350,7 @@ def collect_yearly_htf_summary(base_path: str, year: int, category_col: str = 'S
 
         # Detect if the subdirectory corresponds to the target year
         if year_str in sub.name or sub.name.startswith(year_str):
-            for fn in ['hard_to_fill_signals_by_zip.csv', 'hard_to_fill_signals_by_state.csv']:
+            for fn in ['hard_to_fill_signals_zip.csv', 'hard_to_fill_signals_state.csv']:
                 fpath = sub / fn
                 if fpath.exists():
                     df = pd.read_csv(fpath, dtype={'Zip': str, 'zipcode': str})
@@ -358,9 +358,9 @@ def collect_yearly_htf_summary(base_path: str, year: int, category_col: str = 'S
                         df['Zip'] = df['Zip'].str.zfill(5)
                     if 'zipcode' in df.columns:
                         df['zipcode'] = df['zipcode'].str.zfill(5)
-                    if 'by_zip' in fn:
+                    if 'zip' in fn:
                         zip_dfs.append(df)
-                    elif 'by_state' in fn:
+                    elif 'state' in fn:
                         state_dfs.append(df)
 
     def _aggregate_yearly(dfs: list[pd.DataFrame], geo_col: str) -> pd.DataFrame:
@@ -440,8 +440,8 @@ def collect_yearly_htf_summary(base_path: str, year: int, category_col: str = 'S
 
 # Example usage
 if __name__ == "__main__":
-    base = "data/results"
-    year = 2024
+    base = r"C:\Users\azeidell\OneDrive - National Science Foundation\Documents\Andrew\2023-24\1. Projects\NSDS\NLx\data\clean\aggregates"
+    year = 2015
     summaries = collect_yearly_htf_summary(base, year)
     for k, v in summaries.items():
         print(f"{k}: {len(v)} rows")
