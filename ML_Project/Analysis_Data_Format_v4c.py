@@ -25,7 +25,11 @@ def find_csv_files(base_path: str | Path) -> List[Path]:
 
 
 def extract_time_from_path(path: Path) -> Tuple[str, str]:
-    match = re.search(r"(20\\d{2})-(\\d{2})", str(path))
+    """
+    Extract (year, month) from directory or filename text like in v3.
+    Looks for YYYY-MM pattern anywhere in path.
+    """
+    match = re.search(r"(20\d{2})-(\d{2})", str(path))
     if match:
         return match.group(1), match.group(2)
     return "unknown", "unknown"
