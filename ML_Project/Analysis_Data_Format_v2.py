@@ -35,63 +35,56 @@ DATE_RE = re.compile(r'(?<!\d)\d{4}-(0[1-9]|1[0-2])(?!\d)')
 
 # MODIFIED: Now returns a dictionary of dataframes, one for each sheet found.
 # The keys are the sheet names.
-def collect_frames_by_sheet(base: str, excel_name: str) -> dict[str, list[pd.DataFrame]]:
-    # This dictionary will map sheet names to a list of dataframes (one per dated folder)
-    # E.g., {"Sheet1": [df_date1, df_date2], "Sheet2": [df_date1, df_date2]}
-    all_frames_by_sheet = {}
+def collect_frames_by_directory(base: str) -> dict[str, list[pd.DataFrame]]:
+    """
+    Collect CSV files grouped by 'by_state_X' patterns within each dated subdirectory.
+    Focuses only on state-level data for now. The rest of the v2 logic will
+    operate on the returned dictionary exactly as before.
+    """
+    all_frames_by_dir: dict[str, list[pd.DataFrame]] = {}
 
     for entry in os.listdir(base):
-        match = DATE_RE.search(entry)
-
-        if not match:
-            # print(f"Skipping non-dated folder: {entry}") # uncomment for debugging
-            continue
-        year = entry.split("_")[-1].split("-")[0]
-        start_mm = entry.split("_")[-1].split("-")[-1].split(".")[0]
-        # year = match.group("year")
-        # start_mm = match.group("start")
-        # end_month = match.group("end") # not used, but kept for consistency
-
-        excel_path = Path(base) / entry / excel_name
-        if not excel_path.exists():
-            # print(f"Skipping {entry}: {excel_name} not found.") # uncomment for debugging
+        if not DATE_RE.search(entry):
             continue
 
-        # Read ALL sheets from the Excel file into a dictionary {sheet_name: dataframe}
-        try:
-            # sheet_name=None reads all sheets
-            dfs_from_excel = pd.read_excel(excel_path, sheet_name=None)
-        except Exception as e:
-            print(f"Error reading {excel_path}: {e}")
+        folder_path = Path(base) / entry
+        if not folder_path.is_dir():
             continue
 
-        for sheet_name, df_sheet in dfs_from_excel.items():
-            # --- Per Sheet Processing ---
-            # Normalize columns for consistency (state, city, zip)
-            df_sheet = normalize_columns(df_sheet)
+        for file in folder_path.glob("by_state_*.csv"):
+            match = re.match(r"by_state_(.+)\.csv$", file.name.lower())
+            if not match:
+                continue
+            category = match.group(1).replace("_summary", "").replace("_seen", "").replace("_counts", "")
+            try:
+                df = pd.read_csv(file)
+            except Exception as e:
+                print(f"Error reading {file}: {e}")
+                continue
 
-            # Add time metadata
-            df_sheet["year"] = year
-            df_sheet["month"] = start_mm
-            # monthly timestamp using first of month (good index key)
-            df_sheet["date"] = pd.to_datetime(df_sheet["year"].astype(str) + "-" + df_sheet["month"].astype(str).str.zfill(2) + "-01")
+            # Normalize naming & add date metadata
+            df = normalize_columns(df)
+            date_match = DATE_RE.search(entry)
+            if date_match:
+                date_parts = date_match.group(0).split("-")
+                year, month = date_parts[0], date_parts[1]
+            else:
+                year, month = "unknown", "unknown"
+            df["year"], df["month"] = year, month
+            df["date"] = pd.to_datetime(df["year"].astype(str) + "-" + df["month"].astype(str).str.zfill(2) + "-01")
 
-            # Store the dated dataframe into the list for its corresponding sheet
-            if sheet_name not in all_frames_by_sheet:
-                all_frames_by_sheet[sheet_name] = []
-            all_frames_by_sheet[sheet_name].append(df_sheet)
+            all_frames_by_dir.setdefault(category, []).append(df)
 
-    if not all_frames_by_sheet:
-        raise FileNotFoundError("No matching dated folders/Excels found or no data sheets. Check BASE_PATH/CSV_NAME and folder format YYYY_MMmm.")
+    if not all_frames_by_dir:
+        raise FileNotFoundError("No 'by_state_*' CSVs found within dated directories. Check BASE_PATH and filenames.")
 
-    # Now, combine the frames for each sheet and sort them
-    combined_by_sheet = {}
-    for sheet_name, rows in all_frames_by_sheet.items():
-        combined = pd.concat(rows, ignore_index=True)
+    combined_by_category = {}
+    for category, frames in all_frames_by_dir.items():
+        combined = pd.concat(frames, ignore_index=True)
         combined = combined.sort_values(["date"]).reset_index(drop=True)
-        combined_by_sheet[sheet_name] = combined
+        combined_by_category[category] = combined
 
-    return combined_by_sheet
+    return combined_by_category
 
 def pick_value_columns(df: pd.DataFrame, explicit_cols=None):
     if explicit_cols:
@@ -293,7 +286,7 @@ def collect_special_csv(base: str, csv_name: str) -> pd.DataFrame:
 
 def main():
     # MODIFIED: Get a dictionary of combined DataFrames, keyed by sheet name
-    combined_by_sheet = collect_frames_by_sheet(BASE_PATH, CSV_NAME)
+    combined_by_sheet = collect_frames_by_directory(BASE_PATH)
 
     # Initialize a dictionary to store all time-series tables for the final output Excel
     output_tables = {}

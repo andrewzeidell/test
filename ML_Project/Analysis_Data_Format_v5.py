@@ -64,24 +64,38 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------
 # Collection + merging logic (modeled after v2)
 # ---------------------------------------------------------------------
-def collect_frames_by_sheet(base_dir: str | Path) -> Dict[str, pd.DataFrame]:
+def collect_frames_by_directory(base_dir: str | Path) -> Dict[str, pd.DataFrame]:
     """
-    Collect and merge CSVs by analytic theme or geography class.
-    Mimics v2 layout but includes time tagging for aggregation.
+    Collect and merge CSVs grouped by directory rather than inferred sheet names.
+    Focuses on `by_state_*` files — one category per subfolder.
+    Only processes state-level data by design for now.
     """
     all_csvs = find_csv_files(base_dir)
-    groups: Dict[str, List[pd.DataFrame]] = {}
+    collected: Dict[str, List[pd.DataFrame]] = {}
 
     for csv_path in all_csvs:
+        name = csv_path.name.lower()
+        if not name.startswith("by_state_"):
+            continue  # skip non-state files
+        # extract the "thing" (category) after by_state_
+        match = re.match(r"by_state_(.+)\.csv$", name)
+        if match:
+            category = match.group(1).replace("_summary", "").replace("_seen", "").replace("_counts", "")
+        else:
+            category = "unknown"
+
         year, month = extract_time_from_path(csv_path)
         df = load_csv_with_date(csv_path, year, month)
         df = normalize_columns(df)
-        key = csv_path.stem
-        groups.setdefault(key, []).append(df)
+        collected.setdefault(category, []).append(df)
 
-    frames = {k: pd.concat(v, ignore_index=True) for k, v in groups.items()}
-    print(f"📁 Loaded {len(frames)} analytic groups from {base_dir}")
-    return frames
+    # Merge all monthly frames per category
+    merged: Dict[str, pd.DataFrame] = {}
+    for key, dfs in collected.items():
+        merged[key] = pd.concat(dfs, ignore_index=True)
+        print(f"✅ Loaded {len(dfs)} CSV(s) for category [{key}] at state-level")
+
+    return merged
 
 
 # ---------------------------------------------------------------------
@@ -169,7 +183,7 @@ def main(
     base_dir: str = "data/clean/aggregates/",
     out_dir: str = "data/results/",
 ):
-    frames = collect_frames_by_sheet(base_dir)
+    frames = collect_frames_by_directory(base_dir)
     export_timeseries(frames, out_dir)
     print("🏁 Analysis_Data_Format_v5 complete.")
 
