@@ -51,21 +51,52 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df.rename(columns=rename)
 
 
-def collect_frames(base_dir: Path) -> Dict[str, pd.DataFrame]:
+def collect_frames_by_sheet(base_dir: Path) -> Dict[str, pd.DataFrame]:
+    """
+    Traverse the directory tree to detect all pipeline and geographic CSV outputs,
+    similar to v3 but return ready-to-aggregate data keyed by sheet type.
+    """
     files = find_csv_files(base_dir)
-    groups: Dict[str, List[pd.DataFrame]] = {}
+    geo_state, geo_city, geo_zip = [], [], []
+    others = []
 
-    for f in files:
+    for csv_path in files:
+        fname = csv_path.name.lower()
+        if re.search(r"by_state|state", fname):
+            geo_state.append(csv_path)
+        elif re.search(r"by_city|city", fname):
+            geo_city.append(csv_path)
+        elif re.search(r"by_zip|zip", fname):
+            geo_zip.append(csv_path)
+        else:
+            others.append(csv_path)
+
+    frames: Dict[str, pd.DataFrame] = {}
+
+    def load_group(file_list: List[Path], key: str):
+        if not file_list:
+            return
+        parts = []
+        for path in file_list:
+            year, month = extract_time_from_path(path)
+            df = load_and_tag_csv(path, year, month)
+            df = normalize_columns(df)
+            parts.append(df)
+        if parts:
+            frames[key] = pd.concat(parts, ignore_index=True)
+
+    load_group(geo_state, "by_state")
+    load_group(geo_city, "by_city")
+    load_group(geo_zip, "by_zip")
+
+    for f in others:
         year, month = extract_time_from_path(f)
         df = load_and_tag_csv(f, year, month)
         df = normalize_columns(df)
         key = f.stem
-        groups.setdefault(key, []).append(df)
+        frames[key] = df
 
-    merged = {}
-    for key, frames in groups.items():
-        merged[key] = pd.concat(frames, ignore_index=True)
-    return merged
+    return frames
 
 
 def aggregate_counts(df: pd.DataFrame, level: str) -> pd.DataFrame:
@@ -142,7 +173,7 @@ def main(
     base_dir: str = "data/clean/aggregates/",
     out_dir: str = "data/results/",
 ):
-    frames = collect_frames(Path(base_dir))
+    frames = collect_frames_by_sheet(Path(base_dir))
     export_counts(frames, out_dir)
     print("🏁 v4c counts-based export complete →", out_dir)
 
