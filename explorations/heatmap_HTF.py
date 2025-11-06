@@ -342,9 +342,14 @@ def collect_yearly_htf_summary(base_path: str, year: int, category_col: str = 'S
 
     zip_dfs, state_dfs = [], []
 
-    # Identify all dated subfolders for the given year (e.g., 2024-01, 2024-02)
+    # Identify all subfolders adaptively: include any folder that contains the target year's files,
+    # even if the folder name doesn't start with the year (e.g., 'unredacted__job__2024-06')
     for sub in base.iterdir():
-        if sub.is_dir() and sub.name.startswith(year_str):
+        if not sub.is_dir():
+            continue
+
+        # Detect if the subdirectory corresponds to the target year
+        if year_str in sub.name or sub.name.startswith(year_str):
             for fn in ['hard_to_fill_signals_by_zip.csv', 'hard_to_fill_signals_by_state.csv']:
                 fpath = sub / fn
                 if fpath.exists():
@@ -368,25 +373,39 @@ def collect_yearly_htf_summary(base_path: str, year: int, category_col: str = 'S
             if col not in df_all.columns:
                 raise ValueError(f"Missing expected column '{col}' in data")
 
-        grouped = (
+        # Summarize all zips throughout the year: ensure full coverage, not just the max category.
+        grouped_all = (
             df_all.groupby([geo_col, 'onet_norm'])
             .agg(total_htf=('hard_to_fill_count', 'sum'),
                  avg_htf=('hard_to_fill_count', 'mean'))
             .reset_index()
         )
 
-        # Determine the most frequent ONET code per geography
-        most_freq = (
-            df_all.groupby(geo_col)['onet_norm']
-            .agg(lambda x: x.value_counts().idxmax())
-            .reset_index()
-            .rename(columns={'onet_norm': 'most_frequent_onet'})
+        # Determine top ONET per geography for labeling
+        top_per_geo = (
+            grouped_all.loc[grouped_all.groupby(geo_col)['total_htf'].idxmax()]
+            [[geo_col, 'onet_norm']]
+            .rename(columns={'onet_norm': 'top_onet_norm'})
         )
 
-        summary = grouped.merge(most_freq, on=geo_col, how='left')
+        summary = grouped_all.merge(top_per_geo, on=geo_col, how='left')
+
+        # Ensure every ZIP or state is represented for the year even if missing data:
+        all_geo_vals = df_all[geo_col].drop_duplicates()
+        complete = []
+        for geo in all_geo_vals:
+            sub = summary[summary[geo_col] == geo]
+            if sub.empty:
+                # Fill with zero baseline to maintain presence
+                complete.append({geo_col: geo, 'onet_norm': 'None', 'total_htf': 0, 'avg_htf': 0, 'top_onet_norm': 'None'})
+            else:
+                complete.append(sub)
+        summary = pd.concat([pd.DataFrame(c) if isinstance(c, dict) else c for c in complete], ignore_index=True)
 
         if category_col in df_all.columns:
-            summary[category_col] = df_all[[geo_col, category_col]].drop_duplicates(subset=[geo_col])[category_col].values
+            # Preserve category type for grouping or plotting downstream
+            category_per_geo = df_all[[geo_col, category_col]].drop_duplicates(subset=[geo_col])
+            summary = summary.merge(category_per_geo, on=geo_col, how='left')
         else:
             summary[category_col] = 'Uncategorized'
 
