@@ -230,7 +230,8 @@ def plot_hard_to_fill_heatmap(
     """
     # Load shapefile for the geography level
     geo_df = load_shapefile(geography_level)
-    geo_df =geo_df[~geo_df['STUSPS'].isin(['GU','AS','VI','MP'])]
+    if geography_level == 'state': geo_df =geo_df[~geo_df['STUSPS'].isin(['GU','AS','VI','MP'])]
+    if geography_level == 'zip': geo_df['ZCTA5CE20'] = geo_df['ZCTA5CE20'].astype(int)
 
     # Prepare join keys and merge input data with shapefile
     if geography_level == 'state':
@@ -243,9 +244,10 @@ def plot_hard_to_fill_heatmap(
         join_left = geography_col
         join_right = 'STATEFP'
     elif geography_level == 'zip':
-        geography_col = 'zip'
+        geography_col = 'Zip'
         join_left = geography_col
         join_right = 'ZCTA5CE20'
+
     elif geography_level == 'city':
         # Placeholder for city-level join keys
         raise NotImplementedError("City-level heatmap is not implemented yet.")
@@ -271,20 +273,23 @@ def plot_hard_to_fill_heatmap(
 
     # Prepare figure and axis
     fig, ax = plt.subplots(1, 1, figsize=(15, 10))
-
+    ax.set_facecolor('gray')
+    geo_df.plot(ax=ax, color='gray',alpha=0.5)
     # Plot each category separately with its color
     max_count = agg['hard_to_fill_count'].max()
     for cat in categories:
         cat_data = merged[merged[category_col] == cat]
-        cat_data.plot(
-            column='hard_to_fill_count',
-            ax=ax,
-            color=color_map[cat],
-            alpha=cat_data['hard_to_fill_count'] / cat_data['hard_to_fill_count'].max(), # This normalizes to the cat
-            edgecolor='black',
-            linewidth=0.5,
-            label=cat
-        )
+        if not cat_data.empty:
+            cat_data.plot(
+                column='hard_to_fill_count',
+                ax=ax,
+                color=color_map[cat],
+                # alpha=cat_data['hard_to_fill_count'] / cat_data['hard_to_fill_count'].max(), # This normalizes to the cat
+                alpha=1,
+                edgecolor='black',
+                linewidth=0.5,
+                label=cat
+            )
 
     ax.set_title(f'Hard-to-Fill Jobs Heatmap by {geography_level.capitalize()} and Top Job Category')
     ax.axis('off')
@@ -325,6 +330,10 @@ if __name__ == "__main__":
     data_path = r"C:\Users\azeidell\OneDrive - National Science Foundation\Documents\Andrew\2023-24\1. Projects\NSDS\NLx\data\clean\aggregates\unredacted__job__2024-06\hard_to_fill_signals_state.csv"
 
     plot_from_csv(csv_path=data_path,state_fips_csv=state_fips_csv_path)
+    #
+    # data_path = r"C:\Users\azeidell\OneDrive - National Science Foundation\Documents\Andrew\2023-24\1. Projects\NSDS\NLx\data\clean\aggregates\unredacted__job__2024-06\hard_to_fill_signals_zip.csv"
+    # #
+    # plot_from_csv(csv_path=data_path, geography_level='zip', state_fips_csv=state_fips_csv_path)
 
     # # Plot state-level heatmap (requires state_fips_csv_path)
     # plot_hard_to_fill_heatmap(df_state, geography_level='state', category_col='onet_norm', state_fips_csv=state_fips_csv_path)
