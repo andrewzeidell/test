@@ -363,6 +363,21 @@ def collect_yearly_htf_summary(base_path: str, year: int, category_col: str = 'S
                     elif 'state' in fn:
                         state_dfs.append(df)
 
+    from src.reader.summaries import enrich_with_stem_groups
+
+    def _enrich_with_stem(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Use enrichment logic from summaries to merge STEM group classifications onto the dataset.
+        Looks for ONET and SOC codes before aggregation to assign correct 'STEM Group' membership.
+        """
+        try:
+            enriched = enrich_with_stem_groups(df)
+        except Exception as e:
+            print(f"⚠️ STEM enrichment fallback (summaries.enrich_with_stem_groups unavailable): {e}")
+            enriched = df.copy()
+            enriched["STEM Group"] = "Uncategorized"
+        return enriched
+
     def _aggregate_yearly(dfs: list[pd.DataFrame], geo_col: str) -> pd.DataFrame:
         if not dfs:
             return pd.DataFrame()
@@ -373,15 +388,24 @@ def collect_yearly_htf_summary(base_path: str, year: int, category_col: str = 'S
             if col not in df_all.columns:
                 raise ValueError(f"Missing expected column '{col}' in data")
 
-        # Summarize all zips throughout the year: ensure full coverage, not just the max category.
+        # Step 1: Enrich data with STEM categories using actual summaries logic
+        from src.reader.summaries import enrich_data, load_lookups
+
+        # Load lookup tables for STEM and job zones (path may be customized)
+        lookups_path = "data/lookups/"
+        lookups = load_lookups(lookups_path)
+        df_all = enrich_data(df_all, lookups)
+
+        # Step 2: Summarize by geography + ONET + STEM group
+        group_fields = [geo_col, 'onet_norm', 'STEM Group']
         grouped_all = (
-            df_all.groupby([geo_col, 'onet_norm'])
+            df_all.groupby(group_fields)
             .agg(total_htf=('hard_to_fill_count', 'sum'),
                  avg_htf=('hard_to_fill_count', 'mean'))
             .reset_index()
         )
 
-        # Determine top ONET per geography for labeling
+        # Step 3: Determine top ONET per geography for labeling
         top_per_geo = (
             grouped_all.loc[grouped_all.groupby(geo_col)['total_htf'].idxmax()]
             [[geo_col, 'onet_norm']]
@@ -390,20 +414,29 @@ def collect_yearly_htf_summary(base_path: str, year: int, category_col: str = 'S
 
         summary = grouped_all.merge(top_per_geo, on=geo_col, how='left')
 
-        # Ensure every ZIP or state is represented for the year even if missing data:
+        # Step 4: Ensure every ZIP/state is represented
         all_geo_vals = df_all[geo_col].drop_duplicates()
         complete = []
         for geo in all_geo_vals:
             sub = summary[summary[geo_col] == geo]
             if sub.empty:
-                # Fill with zero baseline to maintain presence
-                complete.append({geo_col: geo, 'onet_norm': 'None', 'total_htf': 0, 'avg_htf': 0, 'top_onet_norm': 'None'})
+                complete.append({
+                    geo_col: geo,
+                    'onet_norm': 'None',
+                    'STEM Group': 'Uncategorized',
+                    'total_htf': 0,
+                    'avg_htf': 0,
+                    'top_onet_norm': 'None'
+                })
             else:
                 complete.append(sub)
-        summary = pd.concat([pd.DataFrame(c) if isinstance(c, dict) else c for c in complete], ignore_index=True)
+        summary = pd.concat([
+            pd.DataFrame(c) if isinstance(c, dict) else c
+            for c in complete
+        ], ignore_index=True)
 
+        # Step 5: Add category label if present
         if category_col in df_all.columns:
-            # Preserve category type for grouping or plotting downstream
             category_per_geo = df_all[[geo_col, category_col]].drop_duplicates(subset=[geo_col])
             summary = summary.merge(category_per_geo, on=geo_col, how='left')
         else:
