@@ -131,24 +131,88 @@ def collect_frames_by_sheet(base_dir: str | Path) -> Dict[str, pd.DataFrame]:
     return combined_frames
 
 
+def split_by_stem_group(frame: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+    """
+    Split DataFrame by the 'stem group' column if available; return dictionary of subsets.
+
+    Returns:
+        Dict[str, pd.DataFrame]: Mapping from STEM group name to DataFrame subset.
+    """
+    if "stem group" not in frame.columns:
+        return {"Uncategorized": frame}
+    groups = {}
+    for name, subset in frame.groupby(frame["stem group"].fillna("Uncategorized")):
+        groups[name] = subset
+    return groups
+
+
+def compute_totals_and_averages(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Compute totals and averages for numeric columns while preserving date/year/month columns.
+    """
+    numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
+    if not numeric_cols:
+        return df
+
+    result_frames = [df]
+    if {"year", "month"}.issubset(df.columns):
+        grouped = df.groupby(["year", "month"], dropna=False)
+        summaries = []
+        for (year, month), g in grouped:
+            totals = g[numeric_cols].sum(numeric_only=True)
+            avgs = g[numeric_cols].mean(numeric_only=True)
+            totals["year"], totals["month"], totals["summary_type"] = year, month, "TOTAL"
+            avgs["year"], avgs["month"], avgs["summary_type"] = year, month, "AVERAGE"
+            summaries += [totals, avgs]
+        summary_df = pd.DataFrame(summaries)
+        result_frames.append(summary_df)
+    else:
+        totals = df[numeric_cols].sum(numeric_only=True)
+        avgs = df[numeric_cols].mean(numeric_only=True)
+        totals["summary_type"], avgs["summary_type"] = "TOTAL", "AVERAGE"
+        result_frames.append(pd.DataFrame([totals, avgs]))
+    return pd.concat(result_frames, ignore_index=True)
+
+
 def export_to_csvs(sheet_frames: Dict[str, pd.DataFrame], output_dir: str | Path = "clean_output/timeseries") -> None:
     """
-    Write each time series dataframe to an individual CSV file instead of a single Excel workbook.
+    Export each analytical sheet split by STEM group to its CSVs with totals and averages added.
 
-    Args:
-        sheet_frames: mapping of sheet name to DataFrame
-        output_dir: base directory to store CSV files (created if missing)
+    Now includes a unified 'date' column for easy plotting and chronological analysis.
+
+    Output pattern:
+        clean_output/timeseries/{stem_group}/{sheet_name}.csv
+
+    The output CSVs drop separate `year` and `month` columns since those are merged into `date`.
     """
     output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
     for sheet, frame in sheet_frames.items():
-        out_path = output_dir / f"{sheet}_monthly.csv"
-        try:
-            frame = frame.sort_values(["year", "month"], ascending=[True, True], ignore_index=True)
-            frame.to_csv(out_path, index=False)
-            print(f"✅ Wrote time series CSV: {out_path.relative_to(Path.cwd())}")
-        except Exception as e:
-            print(f"❌ Failed to write CSV for {sheet}: {e}")
+        # Create unified datetime column for time-based plotting
+        if {"year", "month"}.issubset(frame.columns):
+            frame["date"] = pd.to_datetime(frame["year"].astype(str) + "-" + frame["month"].astype(str).str.zfill(2) + "-01")
+            frame = frame.drop(columns=["year", "month"])
+            frame = frame.sort_values(["date"], ascending=True, ignore_index=True)
+
+        for stem_group, df_subset in split_by_stem_group(frame).items():
+            target_dir = output_dir / stem_group
+            target_dir.mkdir(parents=True, exist_ok=True)
+
+            # Add totals/average while keeping 'date' chronological
+            enriched = compute_totals_and_averages(df_subset)
+
+            # If enriched still has year/month, unify for output consistency
+            if {"year", "month"}.issubset(enriched.columns):
+                enriched["date"] = pd.to_datetime(enriched["year"].astype(str) + "-" + enriched["month"].astype(str).str.zfill(2) + "-01")
+                enriched = enriched.drop(columns=["year", "month"])
+            if "date" in enriched.columns:
+                enriched = enriched.sort_values("date", ascending=True, ignore_index=True)
+
+            out_path = target_dir / f"{sheet}.csv"
+            try:
+                enriched.to_csv(out_path, index=False)
+                print(f"✅ Wrote STEM {stem_group}: {out_path} (with unified date index for plotting)")
+            except Exception as e:
+                print(f"❌ Failed to write CSV [{sheet}] for {stem_group}: {e}")
 
 
 def main(base_dir: str = "data/clean/aggregates/", out_dir: str = "clean_output/timeseries/") -> None:
