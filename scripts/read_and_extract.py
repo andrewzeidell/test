@@ -12,12 +12,13 @@ import argparse
 import logging
 import os
 import sys
-from typing import Optional, List
+from typing import Optional
 
 import pandas as pd
 
-from src.reader.etl import read_single_parquet_file, MINIMAL_COLUMNS
-from src.reader.transforms import transformations, lookup_utils
+from src.reader.etl import read_single_parquet_file
+from src.reader.transforms import transformations
+from src.reader.transforms import lookup_utils
 from src.reader import summaries
 
 
@@ -96,6 +97,9 @@ def apply_transformations(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+from typing import List, Optional
+import glob
+
 def find_parquet_files(input_dir: str, date_pattern: Optional[str] = None) -> List[str]:
     """Recursively find parquet files in input_dir matching the optional date_pattern.
 
@@ -106,8 +110,6 @@ def find_parquet_files(input_dir: str, date_pattern: Optional[str] = None) -> Li
     Returns:
         List of matching parquet file paths.
     """
-    import glob
-
     pattern = "**/*.parquet"
     all_files = glob.glob(os.path.join(input_dir, pattern), recursive=True)
     if date_pattern:
@@ -116,9 +118,31 @@ def find_parquet_files(input_dir: str, date_pattern: Optional[str] = None) -> Li
         filtered_files = all_files
     return filtered_files
 
+def find_existing_data(files, output_dir):
+    nonexistent = [] # checks if any are missing
+    incomplete = []
+    for file_path in files:
+        full_contents = ['by_city_job_zones.csv', 'by_city_postings_seen.csv', 'by_city_STEM_groups.csv',
+                         'by_state_job_zones.csv', 'by_state_postings_seen.csv', 'by_state_STEM_groups.csv',
+                         'by_zip_job_zones.csv', 'by_zip_postings_seen.csv', 'by_zip_STEM_groups.csv',
+                         'credentials_education_counts.csv', 'credentials_experience_counts.csv',
+                         'credentials_license_counts.csv', 'hard_to_fill_signals.csv', 'hard_to_fill_signals_city.csv',
+                         'hard_to_fill_signals_state.csv', 'hard_to_fill_signals_zip.csv', 'occupation_by_onet.csv',
+                         'occupation_job_zone_stats.csv', 'posting_age_trends.csv', 'topn_top_companies.csv',
+                         'topn_top_onet.csv', 'topn_top_states.csv']
+        base_name = os.path.splitext(os.path.basename(file_path))[0]
+        processed_path = os.path.join(output_dir, "aggregates", base_name)
+        contents = os.listdir(processed_path)
+        if contents != full_contents: incomplete.append(file_path)
+        data_exists = os.path.exists(processed_path)
+        if not data_exists: nonexistent.append(file_path)
+    print(files)
+    print(nonexistent) # no paths are missing
+    print(incomplete)
+    return incomplete
 
 def process_file(file_path: str, output_dir: str, output_format: str) -> None:
-    """Process a single parquet file: read, transform, merge lookups, filter STEM jobs, and save.
+    """Process a single parquet file: read, transform, merge lookups, and save.
 
     Args:
         file_path: Path to the parquet file.
@@ -127,7 +151,10 @@ def process_file(file_path: str, output_dir: str, output_format: str) -> None:
     """
     logging.info("Processing file: %s", file_path)
     try:
+        from src.reader.etl import MINIMAL_COLUMNS
         columns = MINIMAL_COLUMNS
+        # Fix: read_single_parquet_file expects a single file path and columns
+        from src.reader.etl import read_single_parquet_file
 
         df = read_single_parquet_file(file_path, columns)
         logging.info("Read %d rows from %s", len(df), file_path)
@@ -153,7 +180,6 @@ def process_file(file_path: str, output_dir: str, output_format: str) -> None:
 
         df = lookup_utils.merge_lookup_pandas(df, stem_groups, on='soc2018_from_onet')
 
-        # Filter STEM jobs using filter_stem_jobs from summaries.py
         try:
             df = summaries.filter_stem_jobs(df, stem_groups)
             logging.info("Filtered STEM jobs. Rows after filtering: %d", len(df))
@@ -166,14 +192,68 @@ def process_file(file_path: str, output_dir: str, output_format: str) -> None:
 
         logging.info("Merged original lookup CSV files.")
 
-        os.makedirs(output_dir, exist_ok=True)
+        # os.makedirs(args.output_dir, exist_ok=True)
         base_name = os.path.splitext(os.path.basename(file_path))[0]
-        output_file = os.path.join(output_dir, f"{base_name}_cleaned.{output_format}")
-        if output_format == "parquet":
-            df.to_parquet(output_file, index=False)
-        else:
-            df.to_feather(output_file)
-        logging.info("Saved cleaned data to %s", output_file)
+        # output_file = os.path.join(args.output_dir, f"{base_name}_cleaned.{args.format}")
+        # if args.format == "parquet":
+        #     df.to_parquet(output_file, index=False)
+        # else:
+        #     df.to_feather(output_file)
+        # logging.info("Saved cleaned data to %s", output_file)
+
+        # Perform aggregation per file/month using summaries module
+        try:
+            logging.info("Starting aggregation for file: %s", file_path)
+            data_exists = os.path.exists(os.path.join(output_dir, "aggregates", base_name))
+            lookups_dir = os.path.join(
+                r"C:\Users\azeidell\OneDrive - National Science Foundation\Documents\Andrew\2023-24\1. Projects\NSDS\NLx\data",
+                "lookups")  # Adjust if needed
+            lookups = summaries.load_lookups(lookups_dir)
+            enriched_df = summaries.enrich_data(df, lookups)
+            enriched_df = summaries.calculate_posting_age(enriched_df)
+            # enriched_df = summaries.normalize_pay(enriched_df)
+
+            # For just running the HTF summaries, check if data exists, otherwise run all - commenting now
+            # if not data_exists:
+            geography_agg = summaries.aggregate_geography(enriched_df)
+            occupation_agg = summaries.aggregate_occupation(enriched_df)
+            credentials_agg = summaries.analyze_credentials(enriched_df)
+            top_n_agg = summaries.compute_top_n(enriched_df, n=10)
+            p_age_agg = summaries.aggregate_posting_age_trends(enriched_df)
+            htf = summaries.detect_hard_to_fill(enriched_df)
+            htf_state = summaries.detect_hard_to_fill_by_geography(enriched_df, geography_level='state')
+            htf_city = summaries.detect_hard_to_fill_by_geography(enriched_df, geography_level='city')
+            htf_zip = summaries.detect_hard_to_fill_by_geography(enriched_df, geography_level='zip')
+
+            aggregates = {
+                'geography': geography_agg,
+                'occupation': occupation_agg,
+                'credentials': credentials_agg,
+                'top_n': top_n_agg,
+                'p_age_agg': p_age_agg,
+                'htf_state': htf_state,
+                'htf_city': htf_city,
+                'htf_zip': htf_zip,
+                'htf': htf
+            }
+            # else:
+            #     htf_state = summaries.detect_hard_to_fill_by_geography(enriched_df, geography_level='state')
+            #     htf_city = summaries.detect_hard_to_fill_by_geography(enriched_df, geography_level='city')
+            #     htf_zip = summaries.detect_hard_to_fill_by_geography(enriched_df, geography_level='zip')
+            #
+            #     aggregates = {
+            #         'htf_state': htf_state,
+            #         'htf_city': htf_city,
+            #         'htf_zip': htf_zip
+            #     }
+
+
+
+            aggregates_output_dir = os.path.join(output_dir, "aggregates", base_name)
+            summaries.save_outputs(aggregates, aggregates_output_dir)
+            logging.info("Saved aggregated outputs to %s", aggregates_output_dir)
+        except Exception as e:
+            logging.error("Error during aggregation for file %s: %s", file_path, e, exc_info=True)
 
     except Exception as e:
         logging.error("Error processing file %s: %s", file_path, e, exc_info=True)
@@ -191,6 +271,7 @@ def main() -> None:
         args = parse_args()
         logging.info("Starting read_and_extract with args: %s", args)
         try:
+            from src.reader.etl import MINIMAL_COLUMNS
             columns = MINIMAL_COLUMNS
             # Refactor CLI to process files individually for memory efficiency and per-file aggregation
             files = find_parquet_files(args.input_dir, args.date_pattern)
@@ -221,56 +302,50 @@ def main() -> None:
 
                     df = lookup_utils.merge_lookup_pandas(df, stem_groups, on='soc2018_from_onet')
 
-                    # Filter STEM jobs using filter_stem_jobs from summaries.py
-                    try:
-                        df = summaries.filter_stem_jobs(df, stem_groups)
-                        logging.info("Filtered STEM jobs. Rows after filtering: %d", len(df))
-                    except Exception as e:
-                        logging.error("Error filtering STEM jobs for file %s: %s", file_path, e, exc_info=True)
-
                     # Normalize and merge ONET job zones
                     job_zones = job_zones.rename(columns={'Code': 'onet_norm'})
                     df = lookup_utils.merge_lookup_pandas(df, job_zones, on='onet_norm')
 
                     logging.info("Merged original lookup CSV files.")
 
-                    os.makedirs(args.output_dir, exist_ok=True)
+                    # os.makedirs(args.output_dir, exist_ok=True)
                     base_name = os.path.splitext(os.path.basename(file_path))[0]
-                    output_file = os.path.join(args.output_dir, f"{base_name}_cleaned.{args.format}")
-                    if args.format == "parquet":
-                        df.to_parquet(output_file, index=False)
-                    else:
-                        df.to_feather(output_file)
-                    logging.info("Saved cleaned data to %s", output_file)
+                    # output_file = os.path.join(args.output_dir, f"{base_name}_cleaned.{args.format}")
+                    # if args.format == "parquet":
+                    #     df.to_parquet(output_file, index=False)
+                    # else:
+                    #     df.to_feather(output_file)
+                    # logging.info("Saved cleaned data to %s", output_file)
 
                     # Perform aggregation per file/month using summaries module
                     try:
                         logging.info("Starting aggregation for file: %s", file_path)
-                        lookups_dir = "data/raw"  # Adjust if needed
+                        lookups_dir = os.path.join(r"C:\Users\azeidell\OneDrive - National Science Foundation\Documents\Andrew\2023-24\1. Projects\NSDS\NLx\data", "lookups")  # Adjust if needed
                         lookups = summaries.load_lookups(lookups_dir)
                         enriched_df = summaries.enrich_data(df, lookups)
-
-                        # Filter STEM jobs before further processing
-                        try:
-                            stem_groups_agg = lookups.get('stem_groups')
-                            enriched_df = summaries.filter_stem_jobs(enriched_df, stem_groups_agg)
-                            logging.info("Filtered STEM jobs in aggregation. Rows after filtering: %d", len(enriched_df))
-                        except Exception as e:
-                            logging.error("Error filtering STEM jobs during aggregation for file %s: %s", file_path, e, exc_info=True)
-
                         enriched_df = summaries.calculate_posting_age(enriched_df)
-                        enriched_df = summaries.normalize_pay(enriched_df)
+                        # enriched_df = summaries.normalize_pay(enriched_df)
 
                         geography_agg = summaries.aggregate_geography(enriched_df)
                         occupation_agg = summaries.aggregate_occupation(enriched_df)
                         credentials_agg = summaries.analyze_credentials(enriched_df)
                         top_n_agg = summaries.compute_top_n(enriched_df, n=10)
+                        p_age_agg = summaries.calculate_posting_age(enriched_df)
+                        htf = summaries.detect_hard_to_fill(enriched_df)
+                        htf_state = summaries.detect_hard_to_fill_by_geography(enriched_df, geography_level='state')
+                        htf_city = summaries.detect_hard_to_fill_by_geography(enriched_df, geography_level='city')
+                        htf_zip = summaries.detect_hard_to_fill_by_geography(enriched_df, geography_level='zip')
 
                         aggregates = {
                             'geography': geography_agg,
                             'occupation': occupation_agg,
                             'credentials': credentials_agg,
-                            'top_n': top_n_agg
+                            'top_n': top_n_agg,
+                            'p_age_agg': p_age_agg,
+                            'htf_state': htf_state,
+                            'htf_city': htf_city,
+                            'htf_zip': htf_zip,
+                            'htf': htf
                         }
 
                         aggregates_output_dir = os.path.join(args.output_dir, "aggregates", base_name)
@@ -287,14 +362,19 @@ def main() -> None:
             sys.exit(1)
     else:
         # No CLI args: automatic directory scanning and processing
-        input_dir = "data/raw"
-        output_dir = "data/clean"
+        input_dir = r"C:\Users\azeidell\OneDrive - National Science Foundation\Documents\Andrew\2023-24\1. Projects\NSDS\NLx\data\job_postings"
+        output_dir = r"C:\Users\azeidell\OneDrive - National Science Foundation\Documents\Andrew\2023-24\1. Projects\NSDS\NLx\data\clean"
         output_format = "parquet"
         date_pattern = None
 
         logging.info("No CLI arguments provided, running automatic directory scan.")
         files = find_parquet_files(input_dir, date_pattern)
         logging.info("Found %d parquet files to process.", len(files))
+        final_run = True # This is to catch any last bits of missing data
+        if final_run: files = find_existing_data(files, output_dir)
+        logging.info("Found %d parquet files to process.", len(files))
+
+        # files = ["C:\\Users\\azeidell\\OneDrive - National Science Foundation\\Documents\\Andrew\\2023-24\\1. Projects\\NSDS\\NLx\\data\\job_postings\\unredacted__job__2024-06.parquet"]
         for file_path in files:
             process_file(file_path, output_dir, output_format)
 
