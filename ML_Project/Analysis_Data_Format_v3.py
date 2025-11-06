@@ -131,29 +131,38 @@ def collect_frames_by_sheet(base_dir: str | Path) -> Dict[str, pd.DataFrame]:
     return combined_frames
 
 
-def export_to_excel(sheet_frames: Dict[str, pd.DataFrame], output_path: str | Path) -> None:
+def export_to_csvs(sheet_frames: Dict[str, pd.DataFrame], output_dir: str | Path = "clean_output/timeseries") -> None:
     """
-    Write all concatenated dataframes into a single Excel workbook.
-    Each key becomes the sheet name.
+    Write each time series dataframe to an individual CSV file instead of a single Excel workbook.
+
+    Args:
+        sheet_frames: mapping of sheet name to DataFrame
+        output_dir: base directory to store CSV files (created if missing)
     """
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        for sheet, frame in sheet_frames.items():
-            frame.to_excel(writer, index=False, sheet_name=sheet[:31])  # Excel sheet name limit
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for sheet, frame in sheet_frames.items():
+        out_path = output_dir / f"{sheet}_monthly.csv"
+        try:
+            frame = frame.sort_values(["year", "month"], ascending=[True, True], ignore_index=True)
+            frame.to_csv(out_path, index=False)
+            print(f"✅ Wrote time series CSV: {out_path.relative_to(Path.cwd())}")
+        except Exception as e:
+            print(f"❌ Failed to write CSV for {sheet}: {e}")
 
 
-def main(base_dir: str = "data/clean/aggregates/", out_path: str = "clean_output/pipeline_summary_v3.xlsx") -> None:
+def main(base_dir: str = "data/clean/aggregates/", out_dir: str = "clean_output/timeseries/") -> None:
     """
-    Main entrypoint for generating the pipeline-aligned Excel workbook.
+    Main entrypoint for generating per-series CSV time series datasets.
+
     Runs on a directory produced by `scripts/read_and_extract.py`.
 
     Example:
         >>> python -m ML_Project.Analysis_Data_Format_v3 --base_dir data/clean/aggregates
     """
     frames = collect_frames_by_sheet(base_dir)
-    export_to_excel(frames, out_path)
-    print(f"✅ pipeline_summary_v3 Excel workbook written to {out_path}")
+    export_to_csvs(frames, out_dir)
+    print("✅ All pipeline-aligned time series CSVs written to:", out_dir)
 
 
 if __name__ == "__main__":
