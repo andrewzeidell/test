@@ -174,59 +174,92 @@ def compute_totals_and_averages(df: pd.DataFrame) -> pd.DataFrame:
     return pd.concat(result_frames, ignore_index=True)
 
 
-def export_to_csvs(sheet_frames: Dict[str, pd.DataFrame], output_dir: str | Path = "clean_output/timeseries") -> None:
+def export_to_csvs(
+    sheet_frames: Dict[str, pd.DataFrame],
+    output_dir: str | Path = "clean_output/timeseries_v3",
+) -> None:
     """
-    Export each analytical sheet split by STEM group to its CSVs with totals and averages added.
+    Export each analytic output grouped by STEM category into a hierarchical folder structure.
 
-    Now includes a unified 'date' column for easy plotting and chronological analysis.
+    New structure (v3):
+        clean_output/timeseries_v3/
+            ├── S&E/
+            │   ├── by_state_seen.csv
+            │   ├── posting_age_trends.csv
+            │   ├── top_states.csv
+            ├── S&E Related/
+            │   ├── ...
+            ├── STEM Middle Skill/
+            │   ├── ...
+            └── Uncategorized/
+                ├── ...
+    
+    Each STEM group gets its own directory, inside which one CSV is written per analytic sheet.
+    The exported CSVs include a unified `date` column (`YYYY-MM-01`).
 
-    Output pattern:
-        clean_output/timeseries/{stem_group}/{sheet_name}.csv
-
-    The output CSVs drop separate `year` and `month` columns since those are merged into `date`.
+    Args:
+        sheet_frames: A dictionary mapping sheet names to DataFrames.
+        output_dir: Base directory under which the hierarchical output is created.
     """
     output_dir = Path(output_dir)
-    for sheet, frame in sheet_frames.items():
-        # Create unified datetime column for time-based plotting
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for sheet_name, frame in sheet_frames.items():
+        # Prepare date column
         if {"year", "month"}.issubset(frame.columns):
-            frame["date"] = pd.to_datetime(frame["year"].astype(str) + "-" + frame["month"].astype(str).str.zfill(2) + "-01")
+            frame["date"] = pd.to_datetime(
+                frame["year"].astype(str) + "-" + frame["month"].astype(str).str.zfill(2) + "-01"
+            )
             frame = frame.drop(columns=["year", "month"])
-            frame = frame.sort_values(["date"], ascending=True, ignore_index=True)
+            frame = frame.sort_values("date", ascending=True, ignore_index=True)
 
-        for stem_group, df_subset in split_by_stem_group(frame).items():
-            target_dir = output_dir / stem_group
-            target_dir.mkdir(parents=True, exist_ok=True)
+        # Split per STEM group
+        for stem_group, sub_df in split_by_stem_group(frame).items():
+            # Directory naming: sanitize invalid filename characters
+            safe_group_name = re.sub(r"[^\w\s&-]", "_", stem_group).strip()
+            group_dir = output_dir / safe_group_name
+            group_dir.mkdir(parents=True, exist_ok=True)
 
-            # Add totals/average while keeping 'date' chronological
-            enriched = compute_totals_and_averages(df_subset)
+            enriched = compute_totals_and_averages(sub_df)
 
-            # If enriched still has year/month, unify for output consistency
             if {"year", "month"}.issubset(enriched.columns):
-                enriched["date"] = pd.to_datetime(enriched["year"].astype(str) + "-" + enriched["month"].astype(str).str.zfill(2) + "-01")
+                enriched["date"] = pd.to_datetime(
+                    enriched["year"].astype(str) + "-" + enriched["month"].astype(str).str.zfill(2) + "-01"
+                )
                 enriched = enriched.drop(columns=["year", "month"])
             if "date" in enriched.columns:
                 enriched = enriched.sort_values("date", ascending=True, ignore_index=True)
 
-            out_path = target_dir / f"{sheet}.csv"
+            csv_path = group_dir / f"{sheet_name}.csv"
             try:
-                enriched.to_csv(out_path, index=False)
-                print(f"✅ Wrote STEM {stem_group}: {out_path} (with unified date index for plotting)")
+                enriched.to_csv(csv_path, index=False)
+                print(f"✅ Exported [{sheet_name}] for STEM group [{stem_group}] → {csv_path}")
             except Exception as e:
-                print(f"❌ Failed to write CSV [{sheet}] for {stem_group}: {e}")
+                print(f"❌ Failed exporting [{sheet_name}] for STEM group [{stem_group}]: {e}")
 
 
-def main(base_dir: str = "data/clean/aggregates/", out_dir: str = "clean_output/timeseries/") -> None:
+def main(
+    base_dir: str = "data/clean/aggregates/",
+    out_dir: str = "clean_output/timeseries_v3/",
+) -> None:
     """
-    Main entrypoint for generating per-series CSV time series datasets.
+    Main entrypoint for generating per-STEM-group analytic CSV time series.
 
-    Runs on a directory produced by `scripts/read_and_extract.py`.
+    This function loads all recognized analytic outputs from a pipeline directory—
+    e.g., the outputs from `scripts/read_and_extract.py`—and exports them under:
 
-    Example:
-        >>> python -m ML_Project.Analysis_Data_Format_v3 --base_dir data/clean/aggregates
+        clean_output/timeseries_v3/{STEM Group}/{sheet_name}.csv
+
+    Each sheet (like by_state_seen, posting_age_trends, occupation_by_onet)
+    becomes a separate CSV inside its corresponding STEM group folder.
+
+    Args:
+        base_dir: Source directory containing pipeline CSVs.
+        out_dir: Destination root for clean hierarchical CSV outputs.
     """
     frames = collect_frames_by_sheet(base_dir)
     export_to_csvs(frames, out_dir)
-    print("✅ All pipeline-aligned time series CSVs written to:", out_dir)
+    print("✅ Hierarchical time series CSVs written under:", out_dir)
 
 
 if __name__ == "__main__":
