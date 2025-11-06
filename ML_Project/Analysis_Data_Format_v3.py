@@ -104,20 +104,58 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 def collect_frames_by_sheet(base_dir: str | Path) -> Dict[str, pd.DataFrame]:
     """
-    Traverse the pipeline output directory and assemble categorized time series
-    from standardized CSV outputs.
+    Traverse recursively to detect all relevant pipeline and geographic CSV outputs,
+    including by_state, by_city, and by_zip aggregations located in nested subfolders.
+
+    Returns a dictionary of DataFrames keyed by sheet name.
     """
     csv_files = find_csv_files(base_dir)
+
+    geo_state, geo_city, geo_zip = [], [], []
+    other_files = []
+
+    # Capture all relevant geography and analytic CSVs
+    for csv_path in csv_files:
+        fname = csv_path.name.lower()
+        if re.search(r"by_state|state", fname):
+            geo_state.append(csv_path)
+        elif re.search(r"by_city|city", fname):
+            geo_city.append(csv_path)
+        elif re.search(r"by_zip|zip", fname):
+            geo_zip.append(csv_path)
+        else:
+            other_files.append(csv_path)
+
+    combined_frames: Dict[str, pd.DataFrame] = {}
+
+    # Helper to load and stack data for a file group
+    def load_group(file_list: List[Path], key: str):
+        if not file_list:
+            return
+        frames = []
+        for path in file_list:
+            year, month = extract_time_from_path(path)
+            df = load_csv_with_date(path, year, month)
+            df = normalize_columns(df)
+            frames.append(df)
+        if frames:
+            combined = pd.concat(frames, ignore_index=True)
+            combined_frames[key] = combined
+            print(f"📊 Detected {len(file_list)} monthly geography CSVs for {key}")
+
+    load_group(geo_state, "by_state_summary")
+    load_group(geo_city, "by_city_summary")
+    load_group(geo_zip, "by_zip_summary")
+
+    # Process non-geography pipeline CSVs
     pipeline_patterns = [
         r"posting_age_trends\.csv$",
         r"hard_to_fill_signals.*\.csv$",
-        r"(state|city|zip)_.+\.csv$",
         r"occupation_.+\.csv$",
         r"credentials_.+\.csv$",
         r"topn_.+\.csv$",
     ]
-    combined_frames: Dict[str, pd.DataFrame] = {}
-    for csv_path in csv_files:
+    for csv_path in other_files:
         fname = csv_path.name
         if not any(re.match(pat, fname) for pat in pipeline_patterns):
             continue
@@ -125,9 +163,11 @@ def collect_frames_by_sheet(base_dir: str | Path) -> Dict[str, pd.DataFrame]:
         df = load_csv_with_date(csv_path, year, month)
         df = normalize_columns(df)
         key = fname.replace(".csv", "")
-        combined_frames[key] = df if key not in combined_frames else pd.concat(
-            [combined_frames[key], df], ignore_index=True
-        )
+        if key not in combined_frames:
+            combined_frames[key] = df
+        else:
+            combined_frames[key] = pd.concat([combined_frames[key], df], ignore_index=True)
+
     return combined_frames
 
 
