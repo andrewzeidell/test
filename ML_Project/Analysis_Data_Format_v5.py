@@ -125,31 +125,41 @@ def export_timeseries(frames: Dict[str, pd.DataFrame], out_dir: str | Path = "da
             continue
         for g in geos:
             subset = aggregated.dropna(subset=[g])
-            file_path = out_path / f"timeseries_{key}_by_{g}.csv"
+
+            # ensure date column exists and is singular (not year/month)
+            if {"year", "month"}.issubset(subset.columns):
+                subset["date"] = pd.to_datetime(
+                    subset["year"].astype(str) + "-" + subset["month"].astype(str).str.zfill(2) + "-01"
+                )
+            subset = subset.drop(columns=[c for c in ["year", "month"] if c in subset.columns])
+            subset = subset.sort_values("date", ascending=True, ignore_index=True)
+
+            # clean up duplicate key suffixes like _by_state_by_state
+            clean_key = re.sub(r"_by_(state|city|zip).*", "", key)
+            file_path = out_path / f"timeseries_{clean_key}_by_{g}.csv"
+
             subset.to_csv(file_path, index=False)
             print(f"✅ Exported → {file_path}")
-            # state-level feed into national totals
+
             if g == "state":
                 national_summaries.append(subset)
 
-    # national totals
+    # national totals (sum across all state files)
     if national_summaries:
         combined = pd.concat(national_summaries, ignore_index=True)
-        if {"year", "month"}.issubset(combined.columns):
+        if "date" not in combined.columns and {"year", "month"}.issubset(combined.columns):
             combined["date"] = pd.to_datetime(
                 combined["year"].astype(str) + "-" + combined["month"].astype(str).str.zfill(2) + "-01"
             )
+        # drop groupings and sum postings_count across all STEM groupings
         totals = (
-            combined.groupby(["year", "month"], dropna=False)
-            [["postings_count"]]
+            combined.groupby("date", dropna=False)["postings_count"]
             .sum()
             .reset_index()
-        )
-        totals["date"] = pd.to_datetime(
-            totals["year"].astype(str) + "-" + totals["month"].astype(str).str.zfill(2) + "-01"
+            .sort_values("date", ignore_index=True)
         )
         totals.to_csv(out_path / "timeseries_all_states_monthly_totals.csv", index=False)
-        print("🌎 National monthly totals written.")
+        print("🌎 National monthly totals written (sum of all postings across states/STEM groups).")
 
 
 # ---------------------------------------------------------------------
