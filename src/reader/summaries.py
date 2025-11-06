@@ -69,16 +69,16 @@ def enrich_data(df: pd.DataFrame, lookups: Dict[str, pd.DataFrame]) -> pd.DataFr
     df['soc2018_from_onet'] = df['onet_norm'].astype(str).str.split('.').str[0]
 
     # Merge STEM groups
-    stem_groups = lookups.get('stem_groups')
-    if stem_groups is not None:
-        stem_groups_renamed = stem_groups.rename(columns={'SOC Code': 'soc2018_from_onet'})
-        df = df.merge(stem_groups_renamed, on='soc2018_from_onet', how='left')
+    # stem_groups = lookups.get('stem_groups')
+    # if stem_groups is not None:
+    #     stem_groups_renamed = stem_groups.rename(columns={'SOC Code': 'soc2018_from_onet'})
+    #     df = df.merge(stem_groups_renamed, on='soc2018_from_onet', how='left')
 
-    # Merge ONET job zones
-    job_zones = lookups.get('job_zones')
-    if job_zones is not None:
-        job_zones_renamed = job_zones.rename(columns={'Code': 'onet_norm'})
-        df = df.merge(job_zones_renamed, on='onet_norm', how='left')
+    # # Merge ONET job zones
+    # job_zones = lookups.get('job_zones')
+    # if job_zones is not None:
+    #     job_zones_renamed = job_zones.rename(columns={'Code': 'onet_norm'})
+    #     df = df.merge(job_zones_renamed, on='onet_norm', how='left')
 
     # Fill missing text fields
     df['Title'] = df['title'].fillna("")
@@ -111,12 +111,12 @@ def filter_stem_jobs(df: pd.DataFrame, stem_groups: pd.DataFrame | None) -> pd.D
 
     # Extract allowed SOC codes based on STEM groups excluding non-stem
     keep_groups = [g for g in stem_groups['STEM Group'].unique() if g.lower() not in ["non-stem", "non stem"]]
-    allow_soc = stem_groups[stem_groups['STEM Group'].isin(keep_groups)]['SOC Code'].unique()
+    allow_soc = stem_groups[stem_groups['STEM Group'].isin(keep_groups)]['soc2018_from_onet'].unique()
 
     before_n = len(df)
     filtered_df = df[df['soc2018_from_onet'].isin(allow_soc)]
     after_n = len(filtered_df)
-    print(f"\nFiltered by SOC allowlist for STEM. Rows kept: {after_n} of {before_n}")
+    print(f"\\nFiltered by SOC allowlist for STEM. Rows kept: {after_n} of {before_n}")
 
     return filtered_df
 
@@ -143,26 +143,6 @@ def calculate_posting_age(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def normalize_to_hourly(row):
-    unit = str(row['parameters_salary_unit']).upper()
-    min_v, max_v = row['parameters_salary_min'], row['parameters_salary_max']
-
-    conversions = {
-        'HOURLY': 1, 'HOUR': 1, 'DAILY': 1 / 8, 'DAY': 1 / 8,
-        'WEEKLY': 1 / 40, 'WEEK': 1 / 40, 'BIWEEKLY': 1 / 80,
-        'MONTHLY': 1 / 173.3333, 'MONTH': 1 / 173.3333,
-        'YEARLY': 1 / 2080, 'YEAR': 1 / 2080, 'ANNUAL': 1 / 2080
-    }
-
-    conv = conversions.get(unit, None)
-
-    if conv:
-        return pd.Series([min_v * conv if pd.notna(min_v) else pd.NA,
-                          max_v * conv if pd.notna(max_v) else pd.NA])
-    else:
-        return pd.Series([pd.NA, pd.NA])
-
-
 def normalize_pay(df: pd.DataFrame) -> pd.DataFrame:
     """
     Normalize pay fields to hourly rates where feasible.
@@ -178,6 +158,25 @@ def normalize_pay(df: pd.DataFrame) -> pd.DataFrame:
             - pay_min_hr
             - pay_max_hr
     """
+    def normalize_to_hourly(row):
+        unit = str(row['parameters_salary_unit']).upper()
+        min_v, max_v = row['parameters_salary_min'], row['parameters_salary_max']
+
+        conversions = {
+            'HOURLY': 1, 'HOUR': 1, 'DAILY': 1 / 8, 'DAY': 1 / 8,
+            'WEEKLY': 1 / 40, 'WEEK': 1 / 40, 'BIWEEKLY': 1 / 80,
+            'MONTHLY': 1 / 173.3333, 'MONTH': 1 / 173.3333,
+            'YEARLY': 1 / 2080, 'YEAR': 1 / 2080, 'ANNUAL': 1 / 2080
+        }
+
+        conv = conversions.get(unit, None)
+
+        if conv:
+            return pd.Series([min_v * conv if pd.notna(min_v) else pd.NA,
+                              max_v * conv if pd.notna(max_v) else pd.NA])
+        else:
+            return pd.Series([pd.NA, pd.NA])
+
     if all(col in df.columns for col in ["parameters_salary_min", "parameters_salary_max", "parameters_salary_unit"]):
         pay_cols = df.apply(normalize_to_hourly, axis=1)
         pay_cols.columns = ['pay_min_hr', 'pay_max_hr']
@@ -187,117 +186,6 @@ def normalize_pay(df: pd.DataFrame) -> pd.DataFrame:
         df['pay_max_hr'] = pd.NA
 
     return df
-
-def aggregate_posting_age_trends(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Aggregate posting age trends over time by month.
-
-    Args:
-        df (pd.DataFrame): DataFrame with 'date_acquired' and 'Post_Age' columns.
-
-    Returns:
-        pd.DataFrame: DataFrame indexed by month with average and median posting age.
-    """
-    df = df.copy()
-    df['date_acquired'] = pd.to_datetime(df['date_acquired'], utc=True, errors='coerce')
-    df = df.dropna(subset=['date_acquired', 'Post_Age'])
-    df['month'] = df['date_acquired'].dt.to_period('M')
-
-    agg = df.groupby('month')['Post_Age'].agg(['mean', 'median', 'count']).reset_index()
-    agg['month'] = agg['month'].dt.to_timestamp()
-    agg = agg.rename(columns={'mean': 'avg_posting_age', 'median': 'median_posting_age', 'count': 'postings_count'})
-    return agg
-
-def detect_hard_to_fill(df: pd.DataFrame, age_threshold: int = 30, min_postings: int = 10) -> pd.DataFrame:
-    """
-    Detect hard-to-fill job postings based on posting age and expiration.
-
-    Args:
-        df (pd.DataFrame): DataFrame with 'Post_Age' and 'expired' columns.
-        age_threshold (int): Minimum posting age in days to consider hard-to-fill.
-        min_postings (int): Minimum number of postings to consider for aggregation.
-
-    Returns:
-        pd.DataFrame: Aggregated DataFrame by 'onet_norm' with hard-to-fill signals.
-    """
-    df = df.copy()
-    df = df.dropna(subset=['Post_Age', 'onet_norm'])
-
-    # Filter postings that are expired and have posting age above threshold
-    hard_to_fill_mask = (df['expired'] == 1) & (df['Post_Age'] >= age_threshold)
-    hard_to_fill_df = df[hard_to_fill_mask]
-
-    # Aggregate by occupation code
-    agg = hard_to_fill_df.groupby('onet_norm').agg(
-        hard_to_fill_count=pd.NamedAgg(column='Post_Age', aggfunc='count'),
-        avg_posting_age=pd.NamedAgg(column='Post_Age', aggfunc='mean'),
-        median_posting_age=pd.NamedAgg(column='Post_Age', aggfunc='median')
-    ).reset_index()
-
-    # Filter occupations with at least min_postings hard-to-fill postings
-    agg = agg[agg['hard_to_fill_count'] >= min_postings]
-
-    # Sort descending by hard_to_fill_count
-    agg = agg.sort_values(by='hard_to_fill_count', ascending=False)
-
-    return agg
-
-
-def detect_hard_to_fill_by_geography(
-    df: pd.DataFrame,
-    geography_level: str,
-    age_threshold: int = 30,
-    min_postings: int = 10
-) -> pd.DataFrame:
-    """
-    Detect hard-to-fill job postings by geography level (state, city, or zip).
-
-    Args:
-        df (pd.DataFrame): DataFrame with 'Post_Age', 'expired', and geography columns.
-        geography_level (str): One of 'state', 'city', or 'zip'.
-        age_threshold (int): Minimum posting age in days to consider hard-to-fill.
-        min_postings (int): Minimum number of postings to consider for aggregation.
-
-    Returns:
-        pd.DataFrame: Aggregated DataFrame with hard-to-fill signals grouped by geography and occupation.
-    """
-    df = df.copy()
-    df = df.dropna(subset=['Post_Age', 'onet_norm'])
-
-    # Validate geography_level
-    valid_levels = ['state', 'city', 'zip']
-    if geography_level not in valid_levels:
-        raise ValueError(f"Invalid geography_level '{geography_level}'. Must be one of {valid_levels}.")
-
-    # Map geography_level to actual column names in df
-    geo_col_map = {
-        'state': 'state',
-        'city': 'City',
-        'zip': 'Zip'
-    }
-    geo_col = geo_col_map[geography_level]
-
-    # Drop rows with missing geography
-    df = df.dropna(subset=[geo_col])
-
-    # Filter postings that are expired and have posting age above threshold
-    hard_to_fill_mask = (df['expired'] == 1) & (df['Post_Age'] >= age_threshold)
-    hard_to_fill_df = df[hard_to_fill_mask]
-
-    # Aggregate by geography and occupation code
-    agg = hard_to_fill_df.groupby([geo_col, 'onet_norm']).agg(
-        hard_to_fill_count=pd.NamedAgg(column='Post_Age', aggfunc='count'),
-        avg_posting_age=pd.NamedAgg(column='Post_Age', aggfunc='mean'),
-        median_posting_age=pd.NamedAgg(column='Post_Age', aggfunc='median')
-    ).reset_index()
-
-    # Filter groups with at least min_postings hard-to-fill postings
-    agg = agg[agg['hard_to_fill_count'] >= min_postings]
-
-    # Sort descending by hard_to_fill_count
-    agg = agg.sort_values(by='hard_to_fill_count', ascending=False)
-
-    return agg
 
 
 def filter_ghost_jobs(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -465,6 +353,120 @@ def analyze_credentials(df: pd.DataFrame) -> dict:
     return aggregates
 
 
+def detect_hard_to_fill(df: pd.DataFrame, age_threshold: int = 30, min_postings: int = 10) -> pd.DataFrame:
+    """
+    Detect hard-to-fill job postings based on posting age and expiration.
+
+    Args:
+        df (pd.DataFrame): DataFrame with 'Post_Age' and 'expired' columns.
+        age_threshold (int): Minimum posting age in days to consider hard-to-fill.
+        min_postings (int): Minimum number of postings to consider for aggregation.
+
+    Returns:
+        pd.DataFrame: Aggregated DataFrame by 'onet_norm' with hard-to-fill signals.
+    """
+    df = df.copy()
+    df = df.dropna(subset=['Post_Age', 'onet_norm'])
+
+    # Filter postings that are expired and have posting age above threshold
+    hard_to_fill_mask = (df['expired'] == 1) & (df['Post_Age'] >= age_threshold)
+    hard_to_fill_df = df[hard_to_fill_mask]
+
+    # Aggregate by occupation code
+    agg = hard_to_fill_df.groupby('onet_norm').agg(
+        hard_to_fill_count=pd.NamedAgg(column='Post_Age', aggfunc='count'),
+        avg_posting_age=pd.NamedAgg(column='Post_Age', aggfunc='mean'),
+        median_posting_age=pd.NamedAgg(column='Post_Age', aggfunc='median')
+    ).reset_index()
+
+    # Filter occupations with at least min_postings hard-to-fill postings
+    agg = agg[agg['hard_to_fill_count'] >= min_postings]
+
+    # Sort descending by hard_to_fill_count
+    agg = agg.sort_values(by='hard_to_fill_count', ascending=False)
+
+    return agg
+
+def detect_hard_to_fill_by_geography(
+        df: pd.DataFrame,
+        geography_level: str,
+        age_threshold: int = 30,
+        min_postings: int = 10
+) -> pd.DataFrame:
+    """
+    Detect hard-to-fill job postings based on posting age and expiration.
+
+    Args:
+        df (pd.DataFrame): DataFrame with 'Post_Age' and 'expired' columns.
+        age_threshold (int): Minimum posting age in days to consider hard-to-fill.
+        min_postings (int): Minimum number of postings to consider for aggregation.
+
+    Returns:
+        pd.DataFrame: Aggregated DataFrame by 'onet_norm' with hard-to-fill signals.
+    """
+    df = df.copy()
+    df = df.dropna(subset=['Post_Age', 'onet_norm'])
+
+    """
+    Here we will try to aggregate by geography first and then by hard to fill counts
+    """
+
+    # Validate geography levels
+    valid_levels = ['state', 'city', 'zip']
+    if geography_level not in valid_levels:
+        raise ValueError(f"Invalid geography level '{geography_level}'. Must be on of {valid_levels}.")
+
+    # Map geography to actual column names
+    geo_col_map = {
+        'state': 'state',
+        'city': 'City',
+        'zip': 'Zip'
+    }
+
+    geo_col = geo_col_map[geography_level]
+
+    # Drop rows with missing geography
+    df = df.dropna(subset=[geo_col])
+
+    # Filter postings that are expired and have posting age above threshold
+    hard_to_fill_mask = (df['expired'] == 1) & (df['Post_Age'] >= age_threshold)
+    hard_to_fill_df = df[hard_to_fill_mask]
+
+    # Aggregate by geography and occupation code
+    agg = hard_to_fill_df.groupby([geo_col, 'onet_norm']).agg(
+        hard_to_fill_count=pd.NamedAgg(column='Post_Age', aggfunc='count'),
+        avg_posting_age=pd.NamedAgg(column='Post_Age', aggfunc='mean'),
+        median_posting_age=pd.NamedAgg(column='Post_Age', aggfunc='median')
+    ).reset_index()
+
+    # Filter occupations with at least min_postings hard-to-fill postings
+    agg = agg[agg['hard_to_fill_count'] >= min_postings]
+
+    # Sort descending by hard_to_fill_count
+    agg = agg.sort_values(by='hard_to_fill_count', ascending=False)
+
+    return agg
+
+def aggregate_posting_age_trends(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Aggregate posting age trends over time by month.
+
+    Args:
+        df (pd.DataFrame): DataFrame with 'date_acquired' and 'Post_Age' columns.
+
+    Returns:
+        pd.DataFrame: DataFrame indexed by month with average and median posting age.
+    """
+    df = df.copy()
+    df['date_acquired'] = pd.to_datetime(df['date_acquired'], utc=True, errors='coerce')
+    df = df.dropna(subset=['date_acquired', 'Post_Age'])
+    df['month'] = df['date_acquired'].dt.to_period('M')
+
+    agg = df.groupby('month')['Post_Age'].agg(['mean', 'median', 'count']).reset_index()
+    agg['month'] = agg['month'].dt.to_timestamp()
+    agg = agg.rename(columns={'mean': 'avg_posting_age', 'median': 'median_posting_age', 'count': 'postings_count'})
+    return agg
+
 def extract_remote_onsite_flags(df: pd.DataFrame) -> pd.DataFrame:
     """
     Extract remote vs onsite flags from job postings.
@@ -521,69 +523,72 @@ def compute_top_n(df: pd.DataFrame, n: int) -> dict:
     }
 
 
-from typing import Optional
-import logging
-
-def save_aggregates_with_posting_and_htf(
-    aggregates: dict,
-    posting_age_agg: Optional[pd.DataFrame],
-    hard_to_fill_agg: Optional[pd.DataFrame],
-    output_dir: str
-) -> None:
+def save_outputs(aggregates: dict, output_dir: str) -> None:
     """
-    Save aggregated data including posting age trends and hard-to-fill signals to CSV files.
+    Save aggregated data to CSV and Excel files.
 
     Args:
         aggregates (dict): Dictionary of aggregated DataFrames.
-        posting_age_agg (Optional[pd.DataFrame]): Posting age trend aggregate DataFrame.
-        hard_to_fill_agg (Optional[pd.DataFrame]): Hard-to-fill signal aggregate DataFrame.
         output_dir (str): Directory path to save output files.
     """
     os.makedirs(output_dir, exist_ok=True)
 
-    try:
-        # Save posting age trend aggregates
-        if posting_age_agg is not None and not posting_age_agg.empty:
-            posting_age_path = os.path.join(output_dir, "posting_age_trends.csv")
-            posting_age_agg.to_csv(posting_age_path, index=False)
-            logging.info(f"Saved posting age trends to {posting_age_path}")
-        else:
-            logging.warning("No posting age trend data to save.")
+    posting_age_agg = aggregates.get('p_age_agg', None)
+    # Save posting age trend aggregates
+    if posting_age_agg is not None and not posting_age_agg.empty:
+        posting_age_path = os.path.join(output_dir, "posting_age_trends.csv")
+        posting_age_agg.to_csv(posting_age_path, index=False)
 
-        # Save hard-to-fill aggregates
-        if hard_to_fill_agg is not None and not hard_to_fill_agg.empty:
-            htf_path = os.path.join(output_dir, "hard_to_fill_signals.csv")
-            hard_to_fill_agg.to_csv(htf_path, index=False)
-            logging.info(f"Saved hard-to-fill signals to {htf_path}")
-        else:
-            logging.warning("No hard-to-fill signal data to save.")
+    hard_to_fill_agg_state = aggregates.get('htf_state', None)
+    # Save hard-to-fill aggregates
+    if hard_to_fill_agg_state is not None and not hard_to_fill_agg_state.empty:
+        htf_path = os.path.join(output_dir, "hard_to_fill_signals_state.csv")
+        hard_to_fill_agg_state.to_csv(htf_path, index=False)
 
-        # Save other aggregates as before
-        # Save geography aggregates
-        geo = aggregates.get('geography', {})
-        for level, dfs in geo.items():
-            for name, df in dfs.items():
-                csv_path = os.path.join(output_dir, f"{level}_{name}.csv")
-                df.to_csv(csv_path, index=False)
+    hard_to_fill_agg_city = aggregates.get('htf_city', None)
+    # Save hard-to-fill aggregates
+    if hard_to_fill_agg_city is not None and not hard_to_fill_agg_city.empty:
+        htf_path = os.path.join(output_dir, "hard_to_fill_signals_city.csv")
+        hard_to_fill_agg_city.to_csv(htf_path, index=False)
 
-        # Save occupation aggregates
-        occ = aggregates.get('occupation', {})
-        for name, df in occ.items():
-            csv_path = os.path.join(output_dir, f"occupation_{name}.csv")
+    hard_to_fill_agg_zip = aggregates.get('htf_zip', None)
+    # Save hard-to-fill aggregates
+    if hard_to_fill_agg_zip is not None and not hard_to_fill_agg_zip.empty:
+        htf_path = os.path.join(output_dir, "hard_to_fill_signals_zip.csv")
+        hard_to_fill_agg_zip.to_csv(htf_path, index=False)
+
+    hard_to_fill_agg = aggregates.get('htf', None)
+    # Save hard-to-fill aggregates
+    if hard_to_fill_agg is not None and not hard_to_fill_agg.empty:
+        htf_path = os.path.join(output_dir, "hard_to_fill_signals.csv")
+        hard_to_fill_agg.to_csv(htf_path, index=False)
+
+
+    # Save geography aggregates
+    geo = aggregates.get('geography', None)
+    # if geo is not None and not geo.empty:
+    for level, dfs in geo.items():
+        for name, df in dfs.items():
+            csv_path = os.path.join(output_dir, f"{level}_{name}.csv")
             df.to_csv(csv_path, index=False)
 
-        # Save credentials aggregates
-        creds = aggregates.get('credentials', {})
-        for name, df in creds.items():
-            csv_path = os.path.join(output_dir, f"credentials_{name}.csv")
-            df.to_csv(csv_path, index=False)
+    # Save occupation aggregates
+    occ = aggregates.get('occupation', None)
+    # if occ is not None and not occ.empty:
+    for name, df in occ.items():
+        csv_path = os.path.join(output_dir, f"occupation_{name}.csv")
+        df.to_csv(csv_path, index=False)
 
-        # Save top-N aggregates
-        topn = aggregates.get('top_n', {})
-        for name, df in topn.items():
-            csv_path = os.path.join(output_dir, f"topn_{name}.csv")
-            df.to_csv(csv_path, index=False)
+    # Save credentials aggregates
+    creds = aggregates.get('credentials', None)
+    # if creds is not None and not creds.empty:
+    for name, df in creds.items():
+        csv_path = os.path.join(output_dir, f"credentials_{name}.csv")
+        df.to_csv(csv_path, index=False)
 
-    except Exception as e:
-        logging.error(f"Error saving aggregates: {e}")
-        raise
+    # Save top-N aggregates
+    topn = aggregates.get('top_n', None)
+    # if topn is not None and not topn.empty:
+    for name, df in topn.items():
+        csv_path = os.path.join(output_dir, f"topn_{name}.csv")
+        df.to_csv(csv_path, index=False)
