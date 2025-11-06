@@ -315,6 +315,118 @@ def plot_from_csv(csv_path: str, geography_level: str = 'state', category_col: s
     df = pd.read_csv(csv_path)
     plot_hard_to_fill_heatmap(df, geography_level, category_col, state_fips_csv)
 
+
+def collect_yearly_htf_summary(base_path: str, year: int, category_col: str = 'STEM Group'):
+    """
+    Collect, aggregate, and export yearly hard-to-fill (HTF) summaries by ZIP and state.
+
+    Args:
+        base_path (str): Base directory containing monthly subfolders (e.g., "2024-01", "2024-02").
+        year (int): The year to summarize.
+        category_col (str): Column name representing job category or STEM group. Defaults to 'STEM Group'.
+
+    Returns:
+        dict[str, pd.DataFrame]: A dictionary with six keys:
+            'zip_S&E', 'zip_S&E Related', 'zip_STEM Middle Skill',
+            'state_S&E', 'state_S&E Related', 'state_STEM Middle Skill'
+            Each contains a DataFrame summarizing total and average counts for the year.
+    """
+    import os
+    from pathlib import Path
+    from collections import defaultdict
+
+    year_str = str(year)
+    base = Path(base_path)
+    if not base.exists():
+        raise FileNotFoundError(f"Base path {base_path} not found")
+
+    zip_dfs, state_dfs = [], []
+
+    # Identify all dated subfolders for the given year (e.g., 2024-01, 2024-02)
+    for sub in base.iterdir():
+        if sub.is_dir() and sub.name.startswith(year_str):
+            for fn in ['hard_to_fill_signals_by_zip.csv', 'hard_to_fill_signals_by_state.csv']:
+                fpath = sub / fn
+                if fpath.exists():
+                    df = pd.read_csv(fpath, dtype={'Zip': str, 'zipcode': str})
+                    if 'Zip' in df.columns:
+                        df['Zip'] = df['Zip'].str.zfill(5)
+                    if 'zipcode' in df.columns:
+                        df['zipcode'] = df['zipcode'].str.zfill(5)
+                    if 'by_zip' in fn:
+                        zip_dfs.append(df)
+                    elif 'by_state' in fn:
+                        state_dfs.append(df)
+
+    def _aggregate_yearly(dfs: list[pd.DataFrame], geo_col: str) -> pd.DataFrame:
+        if not dfs:
+            return pd.DataFrame()
+
+        df_all = pd.concat(dfs, ignore_index=True)
+        required_cols = [geo_col, 'hard_to_fill_count', 'onet_norm']
+        for col in required_cols:
+            if col not in df_all.columns:
+                raise ValueError(f"Missing expected column '{col}' in data")
+
+        grouped = (
+            df_all.groupby([geo_col, 'onet_norm'])
+            .agg(total_htf=('hard_to_fill_count', 'sum'),
+                 avg_htf=('hard_to_fill_count', 'mean'))
+            .reset_index()
+        )
+
+        # Determine the most frequent ONET code per geography
+        most_freq = (
+            df_all.groupby(geo_col)['onet_norm']
+            .agg(lambda x: x.value_counts().idxmax())
+            .reset_index()
+            .rename(columns={'onet_norm': 'most_frequent_onet'})
+        )
+
+        summary = grouped.merge(most_freq, on=geo_col, how='left')
+
+        if category_col in df_all.columns:
+            summary[category_col] = df_all[[geo_col, category_col]].drop_duplicates(subset=[geo_col])[category_col].values
+        else:
+            summary[category_col] = 'Uncategorized'
+
+        return summary
+
+    yearly_zip = _aggregate_yearly(zip_dfs, geo_col='Zip' if zip_dfs and 'Zip' in zip_dfs[0].columns else 'zipcode')
+    yearly_state = _aggregate_yearly(state_dfs, geo_col='state' if state_dfs and 'state' in state_dfs[0].columns else 'State')
+
+    # Split into STEM Group categories if column exists
+    categories = ['S&E', 'S&E Related', 'STEM Middle Skill']
+    results = {}
+    for level_name, df in [('zip', yearly_zip), ('state', yearly_state)]:
+        if not df.empty:
+            for cat in categories:
+                df_cat = df[df.get(category_col, '') == cat]
+                results[f'{level_name}_{cat}'] = df_cat
+
+    # Save results
+    result_dir = Path(f"data/results/{year}")
+    result_dir.mkdir(parents=True, exist_ok=True)
+    excel_path = result_dir / f"yearly_htf_summary_{year}.xlsx"
+
+    with pd.ExcelWriter(excel_path) as writer:
+        for key, frame in results.items():
+            if not frame.empty:
+                frame.to_excel(writer, sheet_name=key[:31], index=False)
+                csv_path = result_dir / f"{key}.csv"
+                frame.to_csv(csv_path, index=False)
+
+    return results
+
+
+# Example usage
+if __name__ == "__main__":
+    base = "data/results"
+    year = 2024
+    summaries = collect_yearly_htf_summary(base, year)
+    for k, v in summaries.items():
+        print(f"{k}: {len(v)} rows")
+
 if __name__ == "__main__":
     # Example usage with dummy data for state level
     data_state = {
