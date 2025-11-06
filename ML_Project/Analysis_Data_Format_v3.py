@@ -1,21 +1,27 @@
 """
-Analysis_Data_Format_v3
------------------------
+Analysis_Data_Format_v3 (Pipeline-Aligned)
+------------------------------------------
 
-Extends functionality of Analysis_Data_Format_v2 to handle cases where the
-individual Excel "sheets" from v2 are now stored as separate CSV files
-within monthly or dated subdirectories.
+Version 3 of the analysis aggregator now explicitly targets the CSV outputs
+produced by the `scripts/read_and_extract.py` and `src/reader/summaries.py`
+pipelines. This version aligns naming conventions, normalization, and merge
+keys with those used by the summaries module.
 
-Key improvements:
-1. Recursively searches a base analysis directory for per-sheet CSVs
-   (e.g., "by_state_seen.csv", "education_counts.csv").
-2. Groups files by former sheet name inferred from filename prefixes.
-3. Extracts date metadata (year-month) from the folder hierarchy.
-4. Concatenates data across months per sheet to assemble time series.
-5. Writes a consolidated Excel workbook, each sheet representing an 
-   original logical table from the legacy Excel workflows.
+Enhancements:
+1. Recognizes standardized pipeline CSV outputs such as:
+   - posting_age_trends.csv
+   - hard_to_fill_signals*.csv (state, city, zip)
+   - state_*, city_*, zip_* geographic aggregates
+   - occupation_*, credentials_*, and topn_* summary outputs
+2. Ensures consistent merge keys across aggregations:
+   ('date', 'state', 'city', 'zip', 'onet_norm', 'soc2018_from_onet').
+3. Uses the same normalization logic for state, city, and zip columns as
+   defined by normalize_columns().
+4. Produces unified Excel workbook `clean_output/pipeline_summary_v3.xlsx`,
+   grouping outputs by analytic category.
+5. Demonstrates use with output directory from read_and_extract pipeline.
 
-Output: `clean_output/timeseries_v3.xlsx`
+Compatibility: fully synchronized with summaries & read_and_extract CSV conventions.
 """
 
 from __future__ import annotations
@@ -82,22 +88,47 @@ def load_csv_with_date(csv_path: Path, year: str, month: str) -> pd.DataFrame:
     return df
 
 
+def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize likely ID columns (state, city, zip) consistent with v2 and summaries."""
+    rename_map = {}
+    for c in df.columns:
+        lname = c.strip().lower().replace(" ", "_")
+        if lname in {"state"}:
+            rename_map[c] = "state"
+        elif lname in {"city", "place"}:
+            rename_map[c] = "city"
+        elif lname in {"zip", "zipcode", "zip_code", "postal_code"}:
+            rename_map[c] = "zip"
+    return df.rename(columns=rename_map)
+
+
 def collect_frames_by_sheet(base_dir: str | Path) -> Dict[str, pd.DataFrame]:
     """
-    Traverse directories and build concatenated time series per former sheet name.
+    Traverse the pipeline output directory and assemble categorized time series
+    from standardized CSV outputs.
     """
     csv_files = find_csv_files(base_dir)
-    grouped = group_by_sheet(csv_files)
-
-    result_frames: Dict[str, pd.DataFrame] = {}
-    for sheet_name, entries in grouped.items():
-        frames = []
-        for file_path, (y, m) in entries:
-            df = load_csv_with_date(file_path, y, m)
-            frames.append(df)
-        if frames:
-            result_frames[sheet_name] = pd.concat(frames, ignore_index=True)
-    return result_frames
+    pipeline_patterns = [
+        r"posting_age_trends\.csv$",
+        r"hard_to_fill_signals.*\.csv$",
+        r"(state|city|zip)_.+\.csv$",
+        r"occupation_.+\.csv$",
+        r"credentials_.+\.csv$",
+        r"topn_.+\.csv$",
+    ]
+    combined_frames: Dict[str, pd.DataFrame] = {}
+    for csv_path in csv_files:
+        fname = csv_path.name
+        if not any(re.match(pat, fname) for pat in pipeline_patterns):
+            continue
+        year, month = extract_time_from_path(csv_path)
+        df = load_csv_with_date(csv_path, year, month)
+        df = normalize_columns(df)
+        key = fname.replace(".csv", "")
+        combined_frames[key] = df if key not in combined_frames else pd.concat(
+            [combined_frames[key], df], ignore_index=True
+        )
+    return combined_frames
 
 
 def export_to_excel(sheet_frames: Dict[str, pd.DataFrame], output_path: str | Path) -> None:
@@ -112,16 +143,17 @@ def export_to_excel(sheet_frames: Dict[str, pd.DataFrame], output_path: str | Pa
             frame.to_excel(writer, index=False, sheet_name=sheet[:31])  # Excel sheet name limit
 
 
-def main(base_dir: str = "analysis_outputs/", out_path: str = "clean_output/timeseries_v3.xlsx") -> None:
+def main(base_dir: str = "data/clean/aggregates/", out_path: str = "clean_output/pipeline_summary_v3.xlsx") -> None:
     """
-    Example main entrypoint for building the v3 timeseries workbook.
+    Main entrypoint for generating the pipeline-aligned Excel workbook.
+    Runs on a directory produced by `scripts/read_and_extract.py`.
 
     Example:
-        >>> python -m ML_Project.Analysis_Data_Format_v3
+        >>> python -m ML_Project.Analysis_Data_Format_v3 --base_dir data/clean/aggregates
     """
     frames = collect_frames_by_sheet(base_dir)
     export_to_excel(frames, out_path)
-    print(f"✅ v3 timeseries workbook written to {out_path}")
+    print(f"✅ pipeline_summary_v3 Excel workbook written to {out_path}")
 
 
 if __name__ == "__main__":
